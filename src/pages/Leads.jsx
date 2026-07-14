@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, X, Phone, Mail, MapPin, BookOpen, Tag, Calendar, Trash2, Check } from 'lucide-react'
+import { Plus, X, Phone, Mail, MapPin, BookOpen, Tag, Calendar, Trash2, Check, Pencil } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 
@@ -44,6 +44,7 @@ export default function Leads() {
   const [newNote, setNewNote] = useState({ note: '', follow_up_type: '' })
   const [savingNote, setSavingNote] = useState(false)
   const [showAddModal, setShowAddModal] = useState(false)
+  const [editingLead, setEditingLead] = useState(null)
   const [newLead, setNewLead] = useState(EMPTY_LEAD)
   const [saving, setSaving] = useState(false)
   const [showEnrollConfirm, setShowEnrollConfirm] = useState(false)
@@ -77,7 +78,34 @@ export default function Leads() {
     setNotes(data || [])
   }
 
-  async function handleAddLead(e) {
+  function closeModal() {
+    setShowAddModal(false)
+    setEditingLead(null)
+    setNewLead(EMPTY_LEAD)
+    setSaveError('')
+  }
+
+  function openEditModal(lead) {
+    setEditingLead(lead)
+    setNewLead({
+      name: lead.name || '',
+      phone: lead.phone || '',
+      email: lead.email || '',
+      location: lead.location || '',
+      source: lead.source || '',
+      course_interested: lead.course_interested || '',
+      lead_type: lead.lead_type || '',
+      next_step: lead.next_step || '',
+      follow_up_date: lead.follow_up_date || '',
+      notes: lead.notes || '',
+      language_preference: lead.language_preference || '',
+      mode_preference: lead.mode_preference || '',
+    })
+    setSaveError('')
+    setShowAddModal(true)
+  }
+
+  async function handleSaveLead(e) {
     e.preventDefault()
     setSaving(true)
     setSaveError('')
@@ -85,24 +113,31 @@ export default function Leads() {
       ...newLead,
       name: newLead.name.trim(),
       phone: newLead.phone.trim(),
-      status: 'new',
     }
     // Strip empty strings — optional fields become null in the DB
     const payload = Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== ''))
-    const { data, error } = await supabase
-      .from('enquiries')
-      .insert(payload)
-      .select()
-      .single()
-    if (error) {
-      setSaveError(error.message)
-      setSaving(false)
-      return
+
+    if (editingLead) {
+      const { data, error } = await supabase
+        .from('enquiries')
+        .update(payload)
+        .eq('id', editingLead.id)
+        .select()
+        .single()
+      if (error) { setSaveError(error.message); setSaving(false); return }
+      setEnquiries(prev => prev.map(e => e.id === data.id ? data : e))
+      if (selectedLead?.id === data.id) setSelectedLead(data)
+    } else {
+      const { data, error } = await supabase
+        .from('enquiries')
+        .insert({ ...payload, status: 'new' })
+        .select()
+        .single()
+      if (error) { setSaveError(error.message); setSaving(false); return }
+      setEnquiries(prev => [data, ...prev])
     }
-    setEnquiries(prev => [data, ...prev])
-    setShowAddModal(false)
-    setNewLead(EMPTY_LEAD)
-    setSaveError('')
+
+    closeModal()
     setSaving(false)
   }
 
@@ -194,7 +229,7 @@ export default function Leads() {
           </p>
         </div>
         <button
-          onClick={() => { setShowAddModal(true); setSaveError('') }}
+          onClick={() => { setEditingLead(null); setNewLead(EMPTY_LEAD); setSaveError(''); setShowAddModal(true) }}
           className="flex items-center gap-2 bg-[#1742b5] text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-[#1338a0] transition-colors"
         >
           <Plus size={16} />
@@ -240,12 +275,12 @@ export default function Leads() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl">
             <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between sticky top-0 bg-white rounded-t-2xl">
-              <h2 className="font-semibold text-gray-900">Add New Lead</h2>
-              <button onClick={() => { setShowAddModal(false); setNewLead(EMPTY_LEAD); setSaveError('') }}>
+              <h2 className="font-semibold text-gray-900">{editingLead ? 'Edit Lead' : 'Add New Lead'}</h2>
+              <button onClick={closeModal}>
                 <X size={18} className="text-gray-400 hover:text-gray-600" />
               </button>
             </div>
-            <form onSubmit={handleAddLead} className="p-6 space-y-4">
+            <form onSubmit={handleSaveLead} className="p-6 space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Name *">
                   <input required value={newLead.name}
@@ -341,13 +376,13 @@ export default function Leads() {
               )}
               <div className="flex gap-3 pt-1">
                 <button type="button"
-                  onClick={() => { setShowAddModal(false); setNewLead(EMPTY_LEAD); setSaveError('') }}
+                  onClick={closeModal}
                   className="flex-1 border border-gray-300 text-gray-700 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors">
                   Cancel
                 </button>
                 <button type="submit" disabled={saving}
                   className="flex-1 bg-[#1742b5] text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-[#1338a0] transition-colors disabled:opacity-50">
-                  {saving ? 'Adding...' : 'Add Lead'}
+                  {saving ? (editingLead ? 'Saving...' : 'Adding...') : (editingLead ? 'Save Changes' : 'Add Lead')}
                 </button>
               </div>
             </form>
@@ -367,6 +402,13 @@ export default function Leads() {
                 <p className="text-xs text-gray-500 mt-0.5">{selectedLead.phone}</p>
               </div>
               <div className="flex items-center gap-1.5 mt-0.5">
+                <button
+                  onClick={() => openEditModal(selectedLead)}
+                  className="p-1.5 text-gray-400 hover:text-[#1742b5] hover:bg-blue-50 rounded-lg transition-colors"
+                  title="Edit lead"
+                >
+                  <Pencil size={15} />
+                </button>
                 <button
                   onClick={() => setShowDeleteConfirm(true)}
                   className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
