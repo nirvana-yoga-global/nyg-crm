@@ -17,11 +17,11 @@ const STAGE_STYLE = {
 const SOURCES = ['Walk-in', 'Social Media', 'Referral', 'Online', 'Workshop', 'Friend', 'Other']
 const COURSES = [
   'Regular Yoga', 'Araiki Local', 'Araiki Foreigner',
-  'Amasana / Inner Mastery Circle', 'TTC', 'Free Workshop',
+  'Amasana / Inner Mastery Circle', 'TTC', 'Free Workshop', "Gold's Gym",
 ]
 const FOLLOW_UP_TYPES = ['Call', 'WhatsApp', 'Email', 'Visit', 'Other']
 const LEAD_TYPES = ['Local', 'Foreigner', 'Online', 'Referral', 'Walk-in']
-const NEXT_STEPS = ['Book Appointment', 'Send Information', 'Enrol Directly', 'Level 2 Ready', 'Level 3 Ready', 'Follow Up Later']
+const NEXT_STEPS = ['Book Appointment', 'Send Information', 'Enrol Directly', 'Booked Free Trial', 'Level 2 Ready', 'Level 3 Ready', 'Follow Up Later']
 const LANGUAGE_PREFS = ['Malayalam', 'English', 'Either']
 const MODE_PREFS = ['Online', 'Offline', 'Either']
 
@@ -33,11 +33,12 @@ const LEAD_TYPE_STYLE = {
   'Walk-in':   'bg-green-100 text-green-700',
 }
 
-const EMPTY_LEAD = { name: '', phone: '', email: '', location: '', source: '', course_interested: '', lead_type: '', next_step: '', follow_up_date: '', notes: '', language_preference: '', mode_preference: '' }
+const EMPTY_LEAD = { name: '', phone: '', email: '', location: '', source: '', course_interested: '', lead_type: '', next_step: '', follow_up_date: '', notes: '', language_preference: '', mode_preference: '', trial_date: '' }
 
 export default function Leads() {
   const { user } = useAuth()
   const [enquiries, setEnquiries] = useState([])
+  const [filterCourse, setFilterCourse] = useState('')
   const [loading, setLoading] = useState(true)
   const [selectedLead, setSelectedLead] = useState(null)
   const [notes, setNotes] = useState([])
@@ -100,6 +101,7 @@ export default function Leads() {
       notes: lead.notes || '',
       language_preference: lead.language_preference || '',
       mode_preference: lead.mode_preference || '',
+      trial_date: lead.trial_date || '',
     })
     setSaveError('')
     setShowAddModal(true)
@@ -113,6 +115,8 @@ export default function Leads() {
       ...newLead,
       name: newLead.name.trim(),
       phone: newLead.phone.trim(),
+      // Clear trial_date if next_step is no longer "Booked Free Trial"
+      trial_date: newLead.next_step === 'Booked Free Trial' ? (newLead.trial_date || null) : null,
     }
     // Strip empty strings — optional fields become null in the DB
     const payload = Object.fromEntries(Object.entries(raw).filter(([, v]) => v !== ''))
@@ -213,8 +217,12 @@ export default function Leads() {
     setSavingNote(false)
   }
 
+  const visibleEnquiries = filterCourse
+    ? enquiries.filter(e => e.course_interested === filterCourse)
+    : enquiries
+
   const grouped = STAGES.reduce((acc, s) => {
-    acc[s] = enquiries.filter(e => e.status === s)
+    acc[s] = visibleEnquiries.filter(e => e.status === s)
     return acc
   }, {})
 
@@ -222,11 +230,21 @@ export default function Leads() {
     <div className="h-screen flex flex-col overflow-hidden">
       {/* Page header */}
       <div className="px-6 py-4 bg-white border-b border-gray-200 flex items-center justify-between flex-shrink-0">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Leads Pipeline</h1>
-          <p className="text-xs text-gray-400 mt-0.5">
-            {loading ? '...' : `${enquiries.length} total enquiries`}
-          </p>
+        <div className="flex items-center gap-4">
+          <div>
+            <h1 className="text-xl font-bold text-gray-900">Leads Pipeline</h1>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {loading ? '...' : `${visibleEnquiries.length}${filterCourse ? '' : ' total'} enquiries${filterCourse ? ` · ${filterCourse}` : ''}`}
+            </p>
+          </div>
+          <select
+            value={filterCourse}
+            onChange={e => setFilterCourse(e.target.value)}
+            className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-[#1742b5] focus:border-transparent transition-shadow"
+          >
+            <option value="">All Courses</option>
+            {COURSES.map(c => <option key={c}>{c}</option>)}
+          </select>
         </div>
         <button
           onClick={() => { setEditingLead(null); setNewLead(EMPTY_LEAD); setSaveError(''); setShowAddModal(true) }}
@@ -334,13 +352,20 @@ export default function Leads() {
                 </Field>
                 <Field label="Next Step">
                   <select value={newLead.next_step}
-                    onChange={e => setNewLead(p => ({ ...p, next_step: e.target.value }))}
+                    onChange={e => setNewLead(p => ({ ...p, next_step: e.target.value, trial_date: e.target.value !== 'Booked Free Trial' ? '' : p.trial_date }))}
                     className={selectCls}>
                     <option value="">Select next step</option>
                     {NEXT_STEPS.map(s => <option key={s}>{s}</option>)}
                   </select>
                 </Field>
               </div>
+              {newLead.next_step === 'Booked Free Trial' && (
+                <Field label="Trial Date">
+                  <input type="date" value={newLead.trial_date}
+                    onChange={e => setNewLead(p => ({ ...p, trial_date: e.target.value }))}
+                    className={inputCls} />
+                </Field>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Language Preference">
                   <select value={newLead.language_preference}
