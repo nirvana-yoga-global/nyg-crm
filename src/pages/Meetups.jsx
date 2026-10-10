@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Plus, X, MapPin, Star, Copy, Check, Trash2, Wifi, Users } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
+import { Plus, X, MapPin, Star, Copy, Check, Trash2, Wifi, Users, Search, UserPlus } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 function generateEventCode() {
@@ -29,6 +29,14 @@ const LEAD_COURSES = [
   'Amasana / Inner Mastery Circle', 'TTC', 'Free Workshop',
 ]
 
+const MEETUP_COURSES = ['Araiki', 'Regular Yoga', 'Free Workshop', 'Other']
+
+function courseMatchFilter(course) {
+  if (course === 'Araiki') return ['Araiki Local', 'Araiki Foreigner']
+  if (!course || course === 'Other') return null
+  return [course]
+}
+
 const LEAD_STATUS_STYLE = {
   new: 'bg-gray-100 text-gray-600',
   contacted: 'bg-blue-100 text-blue-700',
@@ -37,7 +45,7 @@ const LEAD_STATUS_STYLE = {
   lost: 'bg-red-100 text-red-600',
 }
 
-const EMPTY_MEETUP = { title: '', date: '', type: 'offline', location: '', description: '', event_code: '', xp_reward: 50, language: '' }
+const EMPTY_MEETUP = { title: '', date: '', type: 'offline', location: '', description: '', event_code: '', xp_reward: 50, language: '', course: '' }
 const EMPTY_ATTENDEE = { name: '', phone: '', is_student: false, student_profile_id: '' }
 
 export default function Meetups() {
@@ -62,16 +70,55 @@ export default function Meetups() {
   const [araikiCourseFilter, setAraikiCourseFilter] = useState('')
   const [copiedNumbers, setCopiedNumbers] = useState(false)
 
+  // Registration state
+  const [registrations, setRegistrations] = useState([])
+  const [loadingRegistrations, setLoadingRegistrations] = useState(false)
+  const [regSearchText, setRegSearchText] = useState('')
+  const [regSuggestions, setRegSuggestions] = useState([])
+  const [regSearchLoading, setRegSearchLoading] = useState(false)
+  const [showRegDropdown, setShowRegDropdown] = useState(false)
+  const [addingReg, setAddingReg] = useState(false)
+  const [removeRegId, setRemoveRegId] = useState(null)
+  const [removingReg, setRemovingReg] = useState(false)
+  const [showNewPersonForm, setShowNewPersonForm] = useState(false)
+  const [newPerson, setNewPerson] = useState({ name: '', phone: '' })
+  const [savingNewPerson, setSavingNewPerson] = useState(false)
+
+  const regDropdownRef = useRef(null)
+
   useEffect(() => { fetchMeetups() }, [])
 
   useEffect(() => {
-    if (selectedMeetup) fetchAttendance(selectedMeetup.id)
-    else setAttendance([])
+    if (selectedMeetup) {
+      fetchAttendance(selectedMeetup.id)
+      fetchRegistrations(selectedMeetup.id)
+    } else {
+      setAttendance([])
+      setRegistrations([])
+    }
+    setRegSearchText('')
+    setShowRegDropdown(false)
+    setRegSuggestions([])
+    setShowNewPersonForm(false)
+    setNewPerson({ name: '', phone: '' })
+    setRemoveRegId(null)
   }, [selectedMeetup?.id])
 
   useEffect(() => {
     supabase.from('students').select('profile_id, name').order('name')
       .then(({ data }) => setStudents(data || []))
+  }, [])
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (regDropdownRef.current && !regDropdownRef.current.contains(e.target)) {
+        setShowRegDropdown(false)
+        setShowNewPersonForm(false)
+        setNewPerson({ name: '', phone: '' })
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [])
 
   async function fetchMeetups() {
@@ -94,6 +141,126 @@ export default function Meetups() {
     setLoadingAttendance(false)
   }
 
+  async function fetchRegistrations(meetupId) {
+    setLoadingRegistrations(true)
+    const { data } = await supabase
+      .from('meetup_registrations')
+      .select('*')
+      .eq('meetup_id', meetupId)
+      .order('registered_at', { ascending: false })
+    setRegistrations(data || [])
+    setLoadingRegistrations(false)
+  }
+
+  async function searchLeads(text, currentRegs) {
+    setRegSearchLoading(true)
+    const regs = currentRegs ?? registrations
+    const registeredIds = regs.filter(r => r.enquiry_id).map(r => r.enquiry_id)
+
+    let query = supabase
+      .from('enquiries')
+      .select('id, name, phone, course_interested, status')
+      .neq('status', 'lost')
+      .order('created_at', { ascending: false })
+      .limit(20)
+
+    if (text.trim()) {
+      query = query.or(`name.ilike.%${text}%,phone.ilike.%${text}%`)
+    } else {
+      const matchCourses = courseMatchFilter(selectedMeetup?.course)
+      if (matchCourses) {
+        query = query.in('course_interested', matchCourses)
+      }
+    }
+
+    const { data } = await query
+    const filtered = (data || []).filter(l => !registeredIds.includes(l.id))
+    setRegSuggestions(filtered)
+    setRegSearchLoading(false)
+  }
+
+  async function registerLead(lead) {
+    if (addingReg) return
+    setAddingReg(true)
+    const { data, error } = await supabase
+      .from('meetup_registrations')
+      .insert({
+        meetup_id: selectedMeetup.id,
+        enquiry_id: lead.id,
+        name: lead.name,
+        phone: lead.phone || null,
+      })
+      .select()
+      .single()
+    if (!error && data) {
+      setRegistrations(prev => [data, ...prev])
+      setRegSearchText('')
+      setShowRegDropdown(false)
+      setRegSuggestions([])
+    }
+    setAddingReg(false)
+  }
+
+  async function handleAddNewPerson() {
+    if (!newPerson.name.trim() || savingNewPerson) return
+    setSavingNewPerson(true)
+
+    const courseInterested = selectedMeetup?.course && selectedMeetup.course !== 'Other'
+      ? selectedMeetup.course
+      : null
+
+    const { data: enquiry, error: eqErr } = await supabase
+      .from('enquiries')
+      .insert({
+        name: newPerson.name.trim(),
+        phone: newPerson.phone.trim() || null,
+        source: 'Meetup',
+        course_interested: courseInterested,
+        status: 'new',
+      })
+      .select()
+      .single()
+
+    if (eqErr || !enquiry) {
+      console.error('Error creating enquiry:', eqErr)
+      setSavingNewPerson(false)
+      return
+    }
+
+    const { data: reg, error: regErr } = await supabase
+      .from('meetup_registrations')
+      .insert({
+        meetup_id: selectedMeetup.id,
+        enquiry_id: enquiry.id,
+        name: enquiry.name,
+        phone: enquiry.phone || null,
+      })
+      .select()
+      .single()
+
+    if (!regErr && reg) {
+      setRegistrations(prev => [reg, ...prev])
+    }
+
+    setNewPerson({ name: '', phone: '' })
+    setShowNewPersonForm(false)
+    setShowRegDropdown(false)
+    setSavingNewPerson(false)
+  }
+
+  async function removeRegistration() {
+    setRemovingReg(true)
+    const { error } = await supabase
+      .from('meetup_registrations')
+      .delete()
+      .eq('id', removeRegId)
+    if (!error) {
+      setRegistrations(prev => prev.filter(r => r.id !== removeRegId))
+      setRemoveRegId(null)
+    }
+    setRemovingReg(false)
+  }
+
   async function handleAddMeetup(e) {
     e.preventDefault()
     setSaving(true)
@@ -101,6 +268,7 @@ export default function Meetups() {
     const payload = { ...newMeetup, xp_reward: Number(newMeetup.xp_reward) || 50 }
     if (!payload.location) delete payload.location
     if (!payload.description) delete payload.description
+    if (!payload.course) delete payload.course
     const { data, error } = await supabase.from('meetups').insert(payload).select('*').single()
     if (error) {
       console.error('Create meetup error:', error)
@@ -108,7 +276,6 @@ export default function Meetups() {
       setSaving(false)
       return
     }
-    // Attach a zero count so MeetupCard renders without a separate fetch
     setMeetups(prev => [{ ...data, meetup_attendance: [{ count: 0 }] }, ...prev])
     setShowAddModal(false)
     setNewMeetup({ ...EMPTY_MEETUP, event_code: generateEventCode() })
@@ -130,7 +297,6 @@ export default function Meetups() {
     if (!error && data) {
       setAttendance(prev => [data, ...prev])
       setNewAttendee(EMPTY_ATTENDEE)
-      // bump count on the meetup in the list
       setMeetups(prev => prev.map(m =>
         m.id === selectedMeetup.id
           ? { ...m, meetup_attendance: [{ count: (m.meetup_attendance?.[0]?.count ?? 0) + 1 }] }
@@ -287,6 +453,14 @@ export default function Meetups() {
                   </select>
                 </Field>
               </div>
+              <Field label="Course">
+                <select value={newMeetup.course}
+                  onChange={e => setNewMeetup(p => ({ ...p, course: e.target.value }))}
+                  className={selectCls}>
+                  <option value="">Not specified</option>
+                  {MEETUP_COURSES.map(c => <option key={c}>{c}</option>)}
+                </select>
+              </Field>
               <Field label={newMeetup.type === 'online' ? 'Meeting Link / Platform' : newMeetup.type === 'hybrid' ? 'Venue / Meeting Link' : 'Venue / Location'}>
                 <input value={newMeetup.location}
                   onChange={e => setNewMeetup(p => ({ ...p, location: e.target.value }))}
@@ -368,7 +542,7 @@ export default function Meetups() {
 
               {/* Details section */}
               <div className="p-5 space-y-3 border-b border-gray-100">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full ${
                     selectedMeetup.type === 'online' ? 'bg-blue-50 text-blue-700' :
                     selectedMeetup.type === 'hybrid' ? 'bg-purple-50 text-purple-700' :
@@ -380,6 +554,11 @@ export default function Meetups() {
                   {selectedMeetup.language && (
                     <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700">
                       {selectedMeetup.language}
+                    </span>
+                  )}
+                  {selectedMeetup.course && (
+                    <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-50 text-orange-600">
+                      {selectedMeetup.course}
                     </span>
                   )}
                   <span className="text-xs text-gray-500">{formatDate(selectedMeetup.date)}</span>
@@ -423,6 +602,171 @@ export default function Meetups() {
                   <Users size={14} />
                   Araiki Leads
                 </button>
+              </div>
+
+              {/* ── Registered section ── */}
+              <div className="p-5 border-b border-gray-100">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                  Registered · {registrations.length}
+                </p>
+
+                {/* Search / Add registrant */}
+                <div className="relative mb-4" ref={regDropdownRef}>
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                    <input
+                      value={regSearchText}
+                      onChange={e => {
+                        setRegSearchText(e.target.value)
+                        searchLeads(e.target.value, registrations)
+                      }}
+                      onFocus={() => {
+                        setShowRegDropdown(true)
+                        searchLeads(regSearchText, registrations)
+                      }}
+                      placeholder="Search leads to register…"
+                      className="w-full border border-gray-200 rounded-lg pl-8 pr-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-[#1742b5] focus:border-transparent"
+                    />
+                  </div>
+
+                  {showRegDropdown && (
+                    <div className="absolute z-10 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden">
+                      {regSearchLoading ? (
+                        <div className="py-4 text-center text-xs text-gray-400">Searching…</div>
+                      ) : showNewPersonForm ? (
+                        <div className="p-3 space-y-2">
+                          <p className="text-xs font-semibold text-gray-500">New Person</p>
+                          <input
+                            value={newPerson.name}
+                            onChange={e => setNewPerson(p => ({ ...p, name: e.target.value }))}
+                            placeholder="Full name *"
+                            autoFocus
+                            className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-[#1742b5]"
+                          />
+                          <input
+                            value={newPerson.phone}
+                            onChange={e => setNewPerson(p => ({ ...p, phone: e.target.value }))}
+                            placeholder="Phone (optional)"
+                            className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-[#1742b5]"
+                          />
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => { setShowNewPersonForm(false); setNewPerson({ name: '', phone: '' }) }}
+                              className="flex-1 border border-gray-200 text-gray-500 py-1.5 rounded-lg text-xs hover:bg-gray-50"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleAddNewPerson}
+                              disabled={!newPerson.name.trim() || savingNewPerson}
+                              className="flex-1 bg-[#1742b5] text-white py-1.5 rounded-lg text-xs font-semibold hover:bg-[#1338a0] disabled:opacity-50"
+                            >
+                              {savingNewPerson ? 'Saving…' : 'Register'}
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          {regSuggestions.length > 0 && (
+                            <div className="max-h-52 overflow-y-auto">
+                              {regSuggestions.map(lead => (
+                                <button
+                                  key={lead.id}
+                                  onClick={() => registerLead(lead)}
+                                  className="w-full text-left px-3 py-2.5 hover:bg-gray-50 flex items-center gap-3 border-b border-gray-50 last:border-0"
+                                >
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-sm font-medium text-gray-900 truncate">{lead.name}</p>
+                                    {lead.phone && <p className="text-xs text-gray-400">{lead.phone}</p>}
+                                  </div>
+                                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                                    {lead.course_interested && (
+                                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-orange-50 text-orange-600 font-medium truncate max-w-[80px]">
+                                        {lead.course_interested}
+                                      </span>
+                                    )}
+                                    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full capitalize ${LEAD_STATUS_STYLE[lead.status] || 'bg-gray-100 text-gray-600'}`}>
+                                      {lead.status}
+                                    </span>
+                                  </div>
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          {regSuggestions.length === 0 && (
+                            <div className="py-3 text-center text-xs text-gray-400">No matching leads</div>
+                          )}
+                          <button
+                            onClick={() => setShowNewPersonForm(true)}
+                            className="w-full flex items-center gap-2 px-3 py-2.5 text-sm font-medium text-[#1742b5] hover:bg-blue-50 border-t border-gray-100"
+                          >
+                            <UserPlus size={14} />
+                            Add as new person
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Registrations list */}
+                {loadingRegistrations ? (
+                  <div className="py-6 text-center text-xs text-gray-300">Loading…</div>
+                ) : registrations.length === 0 ? (
+                  <div className="py-6 text-center text-xs text-gray-300">No registrations yet</div>
+                ) : (
+                  <div className="space-y-2">
+                    {registrations.map(r => (
+                      <div key={r.id} className="bg-white border border-gray-100 rounded-xl px-3 py-2.5">
+                        {removeRegId === r.id ? (
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs text-gray-600">Remove <strong>{r.name}</strong>?</p>
+                            <div className="flex items-center gap-3">
+                              <button
+                                onClick={() => setRemoveRegId(null)}
+                                className="text-xs text-gray-400 hover:text-gray-600"
+                              >
+                                No
+                              </button>
+                              <button
+                                onClick={removeRegistration}
+                                disabled={removingReg}
+                                className="text-xs font-semibold text-red-600 hover:text-red-700 disabled:opacity-50"
+                              >
+                                {removingReg ? '…' : 'Yes, remove'}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-3">
+                            <div className="w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 bg-orange-50 text-orange-600">
+                              {r.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-medium text-gray-900 truncate">{r.name}</p>
+                              {r.phone && <p className="text-xs text-gray-400">{r.phone}</p>}
+                            </div>
+                            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 capitalize ${
+                              r.status === 'attended' ? 'bg-green-50 text-green-700' :
+                              r.status === 'absent' ? 'bg-red-50 text-red-600' :
+                              'bg-blue-50 text-blue-600'
+                            }`}>
+                              {r.status}
+                            </span>
+                            <button
+                              onClick={() => setRemoveRegId(r.id)}
+                              className="p-1 text-gray-300 hover:text-red-400 hover:bg-red-50 rounded-lg transition-colors flex-shrink-0"
+                            >
+                              <X size={13} />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Attendance section */}
@@ -511,7 +855,6 @@ export default function Meetups() {
       {showAraikiLeads && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[80vh] overflow-hidden shadow-2xl flex flex-col">
-            {/* Header */}
             <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between flex-shrink-0">
               <div>
                 <h2 className="font-semibold text-gray-900">Araiki Leads</h2>
@@ -524,7 +867,6 @@ export default function Meetups() {
               </button>
             </div>
 
-            {/* Filter bar */}
             <div className="px-6 py-3 border-b border-gray-100 flex-shrink-0">
               <select
                 value={araikiCourseFilter}
@@ -536,7 +878,6 @@ export default function Meetups() {
               </select>
             </div>
 
-            {/* Table */}
             <div className="flex-1 overflow-y-auto">
               {araikiLeadsLoading ? (
                 <div className="py-16 text-center text-gray-400 text-sm">Loading…</div>
@@ -580,7 +921,6 @@ export default function Meetups() {
               )}
             </div>
 
-            {/* Footer */}
             <div className="px-6 py-4 border-t border-gray-100 flex-shrink-0 flex items-center justify-between">
               <p className="text-xs text-gray-400">
                 {filteredAraikiLeads.filter(l => l.phone).length} numbers available
@@ -608,7 +948,7 @@ export default function Meetups() {
               </div>
               <h3 className="font-bold text-gray-900">Delete Meetup?</h3>
               <p className="text-sm text-gray-500 mt-2 leading-relaxed">
-                Permanently delete <strong>{selectedMeetup?.title}</strong> and all attendance records? This cannot be undone.
+                Permanently delete <strong>{selectedMeetup?.title}</strong> and all attendance and registration records? This cannot be undone.
               </p>
             </div>
             <div className="space-y-2">
@@ -635,7 +975,6 @@ function MeetupCard({ meetup, isUpcoming, onClick, active }) {
       onClick={onClick}
       className={`bg-white rounded-xl border px-5 py-4 cursor-pointer hover:shadow-md transition-all flex items-center gap-4 ${active ? 'border-[#1742b5]/40 shadow-sm' : 'border-gray-200'}`}
     >
-      {/* Date block */}
       <div className="flex-shrink-0 w-12 text-center">
         <p className="text-lg font-bold text-gray-900 leading-none">
           {new Date(meetup.date).getDate()}
@@ -650,7 +989,6 @@ function MeetupCard({ meetup, isUpcoming, onClick, active }) {
 
       <div className="w-px h-10 bg-gray-100 flex-shrink-0" />
 
-      {/* Main info */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-0.5">
           <p className="font-semibold text-gray-900 truncate">{meetup.title}</p>
@@ -665,8 +1003,11 @@ function MeetupCard({ meetup, isUpcoming, onClick, active }) {
             <Wifi size={10} />
             {meetup.type === 'online' ? 'Online' : meetup.type === 'hybrid' ? 'Hybrid' : 'Offline'}
           </span>
+          {meetup.course && (
+            <span className="text-xs text-orange-500 font-medium">{meetup.course}</span>
+          )}
           {meetup.location && (
-            <span className="text-xs text-gray-400 flex items-center gap-1 truncate max-w-[180px]">
+            <span className="text-xs text-gray-400 flex items-center gap-1 truncate max-w-[160px]">
               <MapPin size={10} className="flex-shrink-0" />
               {meetup.location}
             </span>
@@ -674,7 +1015,6 @@ function MeetupCard({ meetup, isUpcoming, onClick, active }) {
         </div>
       </div>
 
-      {/* Right side stats */}
       <div className="flex-shrink-0 text-right space-y-1">
         <div className="flex items-center gap-1.5 justify-end">
           <Users size={12} className="text-gray-400" />
