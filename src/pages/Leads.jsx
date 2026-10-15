@@ -855,10 +855,10 @@ export default function Leads() {
                   <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-3">
                     <span className="text-green-600 text-xl font-bold">✓</span>
                   </div>
-                  <h3 className="font-bold text-gray-900">Enrol as Person?</h3>
+                  <h3 className="font-bold text-gray-900">Mark as Enrolled?</h3>
                   <p className="text-sm text-gray-500 mt-2 leading-relaxed">
-                    Create a People profile for <strong>{selectedLead?.name}</strong> and move
-                    them to the Enrolled stage.
+                    This adds <strong>{selectedLead?.name}</strong> to People (or links them if
+                    they are already there) and moves them to the Enrolled stage.
                   </p>
                 </div>
                 <div className="space-y-2">
