@@ -47,6 +47,32 @@ function clampNum(val, min, max) {
   return Math.min(max, Math.max(min, n))
 }
 
+// Converts the form state object into a DB-safe payload.
+// Empty strings → null; numeric/integer fields → number or null; booleans pass through.
+const NUMERIC_FIELDS = new Set(['height_cm', 'weight_kg'])
+const INT_FIELDS = new Set([
+  'pulse_bpm', 'systolic_bp', 'diastolic_bp', 'respiratory_rate',
+  'preferred_number_1', 'preferred_number_2', 'cigarettes_per_day',
+])
+
+function sanitizeForDb(obj) {
+  return Object.fromEntries(
+    Object.entries(obj).map(([k, v]) => {
+      if (typeof v === 'boolean') return [k, v]
+      if (v === '' || v == null) return [k, null]
+      if (NUMERIC_FIELDS.has(k)) {
+        const n = parseFloat(v)
+        return [k, isNaN(n) ? null : n]
+      }
+      if (INT_FIELDS.has(k)) {
+        const n = parseInt(v, 10)
+        return [k, isNaN(n) ? null : n]
+      }
+      return [k, v]
+    })
+  )
+}
+
 async function processPhotoToBlob(file) {
   const url = URL.createObjectURL(file)
   const img = new Image()
@@ -334,6 +360,12 @@ function EditMode({
 }) {
   const set = key => val => setForm(prev => ({ ...prev, [key]: val }))
   const bmi = calcBMI(form.height_cm, form.weight_kg)
+  const bottomErrorRef = useRef(null)
+  useEffect(() => {
+    if (error && bottomErrorRef.current) {
+      bottomErrorRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+    }
+  }, [error])
 
   return (
     <div className="space-y-5">
@@ -574,22 +606,29 @@ function EditMode({
       </div>
 
       {/* Action bar */}
-      <div className="flex items-center justify-end gap-3 py-2">
-        {!isNew && (
-          <button
-            onClick={onCancel}
-            className="px-5 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:border-gray-300 hover:text-gray-800 transition-colors"
-          >
-            Cancel
-          </button>
+      <div className="space-y-3 py-2">
+        {error && (
+          <div ref={bottomErrorRef} className="bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-lg">
+            {error}
+          </div>
         )}
-        <button
-          onClick={onSave}
-          disabled={saving}
-          className="px-6 py-2 text-sm font-medium bg-[#1742b5] text-white rounded-lg hover:bg-[#1330a0] disabled:opacity-50 transition-colors"
-        >
-          {saving ? 'Saving…' : 'Save Intake Form'}
-        </button>
+        <div className="flex items-center justify-end gap-3">
+          {!isNew && (
+            <button
+              onClick={onCancel}
+              className="px-5 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:border-gray-300 hover:text-gray-800 transition-colors"
+            >
+              Cancel
+            </button>
+          )}
+          <button
+            onClick={onSave}
+            disabled={saving}
+            className="px-6 py-2 text-sm font-medium bg-[#1742b5] text-white rounded-lg hover:bg-[#1330a0] disabled:opacity-50 transition-colors"
+          >
+            {saving ? 'Saving…' : 'Save Intake Form'}
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -705,7 +744,7 @@ export default function IntakeFormTab({ studentProfileId, enquiryId, prefill, on
               enquiry_id: _ei, student_profile_id: _sp, ...rest } = form
 
       const payload = {
-        ...rest,
+        ...sanitizeForDb(rest),
         photo_path: newPhotoPath,
         ...(enquiryId ? { enquiry_id: enquiryId } : { student_profile_id: studentProfileId }),
       }
