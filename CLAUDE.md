@@ -66,7 +66,7 @@ NYG CRM is a laptop-first web dashboard for Nirvana Yoga Global admins to manage
 
 ## People
 
-`people` is the CRM's master person record — one row per real person regardless of whether they have a NYG Connect account.
+`people` is the CRM's master person record — one row per real person regardless of whether they have a NYG Connect account. A trigger (`sync_person_from_profile`) on `profiles` auto-creates or links a people row on every new PWA student signup.
 
 ### Columns
 - id uuid PK
