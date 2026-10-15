@@ -47,20 +47,62 @@ NYG CRM is a laptop-first web dashboard for Nirvana Yoga Global admins to manage
 - profiles — id, full_name, role, avatar_url
 - students — profile_id, name, phone, email, xp, level_number, streak
 - practice_logs — student_id, practice_type, duration_minutes, xp_earned, created_at
-- enquiries — id, name, phone, email, location, source, course_interested, lead_type, next_step, status, follow_up_date, notes, language_preference, mode_preference, created_at
+- enquiries — id, name, phone, email, location, source, course_interested, lead_type, next_step, status, follow_up_date, notes, language_preference, mode_preference, created_at, person_id
 
 ## New CRM Tables
-- enrollments — id, student_profile_id, course, status, start_date, fee_type, total_fee_agreed, notes
+- people — id, full_name, phone, phone_normalized, email, location, source, notes, profile_id (→ profiles, nullable), created_at, updated_at
+- enrollments — id, student_profile_id, person_id, course, status, start_date, fee_type, total_fee_agreed, notes
 - installments — id, enrollment_id, amount, due_date, paid_date, payment_method, status, receipt_notes
-- araiki_attunements — id, student_profile_id, attunement_number (1-6), date_attended, practice_start_date, ready_for_next, admin_notes
+- araiki_attunements — id, student_profile_id, person_id, attunement_number (1-6), date_attended, practice_start_date, ready_for_next, admin_notes
 - meetups — id, title, date, type (online/offline/hybrid), language, location, description, event_code (unique), xp_reward, created_at
-- meetup_attendance — id, meetup_id, student_profile_id (nullable), name, phone, is_student, attended_at
+- meetup_attendance — id, meetup_id, student_profile_id (nullable), person_id, name, phone, is_student, attended_at
 - lead_notes — id, enquiry_id, admin_id, note, follow_up_type, created_at
-- student_notes — id, student_profile_id, admin_id, note, created_at
-- intake_forms — unified student intake/assessment form linked to profiles.id
+- student_notes — id, student_profile_id, person_id, admin_id, note, created_at
+- intake_forms — unified student intake/assessment form linked to profiles.id; person_id added
+- progress_entries — periodic health/vitals snapshots; student_profile_id, person_id
 
 ## Shared Tables (from NYG Connect, readable by CRM)
 - notifications, parchments, practice_logs, students, profiles — all in same Supabase project, CRM reads these directly
+
+## People
+
+`people` is the CRM's master person record — one row per real person regardless of whether they have a NYG Connect account.
+
+### Columns
+- id uuid PK
+- full_name text NOT NULL
+- phone text — raw as entered by the admin
+- phone_normalized text — output of normalize_phone(); NOT UNIQUE (families share numbers)
+- email text
+- location text
+- source text
+- notes text
+- profile_id uuid UNIQUE — nullable FK to profiles(id) ON DELETE SET NULL; present when the person has a PWA account
+- created_at / updated_at timestamptz (updated_at maintained by trigger)
+
+### person_id in child tables
+enquiries, enrollments, intake_forms, araiki_attunements, progress_entries, student_notes, meetup_attendance all carry a nullable `person_id uuid REFERENCES people(id)`. ON DELETE is RESTRICT for enrollments (financial records must not vanish); CASCADE for all others.
+
+### normalize_phone()
+IMMUTABLE PostgreSQL function. After stripping non-digits and one leading `00`:
+- empty / null → NULL
+- 10 digits starting 6–9 → prepend 91 (Indian mobile)
+- 11 digits starting 0 followed by 6–9 → strip leading 0, prepend 91
+- 12 digits starting 91 → already normalised, return as-is
+- anything else → return digits unchanged
+
+phone_normalized is NOT UNIQUE. Families share one number; multiple people rows per phone_normalized value are expected and allowed. Use it for fuzzy matching only, never as a unique key.
+
+### student_profile_id transition
+The old student_profile_id columns are kept on all child tables for now. All new code for Fees, Enrollments, and any future People-aware feature must use person_id, not student_profile_id. student_profile_id will be removed in a later migration once all screens are ported.
+
+### students ≠ People
+The `students` table is the NYG Connect PWA table that tracks XP, level_number, and streak. It is not the CRM people list. Do not use `students` as a person directory — use `people`.
+
+### RLS
+All new policies (people, enrollments, installments, araiki_attunements, student_notes) use the inline role check:
+`(select role from profiles where id = auth.uid()) = 'admin'`
+Never use is_admin() for new policies — it is not guaranteed to exist in all environments.
 
 ## Course Types
 - Regular Yoga (monthly: Rs 1,500 existing / Rs 2,000 after first month / Rs 2,500 first month with registration / Rs 1,000 kids)
