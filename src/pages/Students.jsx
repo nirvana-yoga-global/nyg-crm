@@ -61,11 +61,11 @@ export default function Students() {
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-xl font-bold text-gray-900">Students</h1>
-          <p className="text-gray-400 text-sm mt-0.5">All enrolled students</p>
+          <h1 className="text-xl font-bold text-gray-900">Connect Students</h1>
+          <p className="text-gray-400 text-sm mt-0.5">Practitioners with an NYG Connect account: sadhana, XP and streaks</p>
         </div>
         <span className="text-sm text-gray-400">
-          {filtered.length} student{filtered.length !== 1 ? 's' : ''}
+          {filtered.length} practitioner{filtered.length !== 1 ? 's' : ''}
         </span>
       </div>
 

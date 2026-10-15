@@ -4,9 +4,9 @@
 NYG CRM is a laptop-first web dashboard for Nirvana Yoga Global admins to manage leads, students, enrollments, fees, and Araiki attunements. It is a separate app from NYG Connect PWA but shares the same Supabase database.
 
 ## Live URLs
-- Production: nyg-crm.vercel.app
-- GitHub: github.com/sreeragrthampi-oss/nyg-crm
-- Supabase: jlfmrligwbxklijugeui.supabase.co (same as NYG Connect)
+- Production: crm.nirvanayogaglobal.com
+- GitHub: github.com/nirvana-yoga-global/nyg-crm
+- Supabase: jlfmrligwbxklijugeui.supabase.co (Nirvana Yoga Global organisation)
 
 ## Tech Stack
 - Frontend: React + Vite
@@ -14,7 +14,7 @@ NYG CRM is a laptop-first web dashboard for Nirvana Yoga Global admins to manage
 - Database: Supabase (same project as NYG Connect)
 - Routing: React Router DOM
 - Charts: Recharts
-- Hosting: Vercel
+- Hosting: Vercel (nirvanayogaglobal account)
 
 ## Brand
 - Primary blue: #1742b5
@@ -31,7 +31,7 @@ NYG CRM is a laptop-first web dashboard for Nirvana Yoga Global admins to manage
 ## Sidebar Navigation
 - Dashboard (home/overview)
 - Leads (enquiry pipeline)
-- Students (all enrolled students)
+- Connect Students (practitioners with an NYG Connect account)
 - Fees (payment tracking)
 - Araiki (attunement tracker)
 - Meetups (bi-weekly attendance)
@@ -81,6 +81,7 @@ New → Contacted → Interested → Enrolled → Lost
 - TTC fees are fully flexible per student
 
 ## Student Profile Page (src/pages/StudentProfile.jsx)
+A People list for everyone enrolled, with or without a PWA account, is planned.
 Six-tab student profile accessible by clicking any student in the Students list:
 - Intake Form — full health/lifestyle/NYG assessment form (IntakeFormTab.jsx)
 - Progress — periodic health/vitals snapshots, before/after comparison (ProgressTab.jsx + progress_entries table)

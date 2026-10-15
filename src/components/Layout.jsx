@@ -1,16 +1,17 @@
 import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, Users, UserCheck, CreditCard,
-  Flower2, Calendar, Settings, LogOut,
+  Flower2, CalendarDays, Calendar, Settings, LogOut,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 
 const NAV_ITEMS = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
   { to: '/leads', icon: Users, label: 'Leads' },
-  { to: '/students', icon: UserCheck, label: 'Students' },
+  { to: '/students', icon: UserCheck, label: 'Connect Students' },
   { to: '/fees', icon: CreditCard, label: 'Fees' },
   { to: '/araiki', icon: Flower2, label: 'Araiki' },
+  { to: '/calendar', icon: CalendarDays, label: 'Calendar' },
   { to: '/meetups', icon: Calendar, label: 'Meetups' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ]

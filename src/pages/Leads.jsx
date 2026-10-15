@@ -721,7 +721,7 @@ export default function Leads() {
               <h3 className="font-bold text-gray-900">Create Student Enrollment?</h3>
               <p className="text-sm text-gray-500 mt-2 leading-relaxed">
                 Mark <strong>{selectedLead?.name}</strong> as Enrolled? You can create their full course
-                enrollment record in the <span className="text-[#1742b5] font-medium">Students</span> section.
+                enrollment record in the <span className="text-[#1742b5] font-medium">Connect Students</span> section.
               </p>
             </div>
             <div className="space-y-2">
