@@ -24,8 +24,11 @@ function AddNoteModal({ onClose, onSaved }) {
     if (!note.trim()) { setError('Note cannot be empty.'); return }
     setSaving(true)
     setError('')
+    const ownerField = onSaved.personId
+      ? { person_id: onSaved.personId }
+      : { student_profile_id: onSaved.studentProfileId }
     const { error: err } = await supabase.from('student_notes').insert({
-      student_profile_id: onSaved.studentProfileId,
+      ...ownerField,
       admin_id: user.id,
       note: note.trim(),
     })
@@ -89,20 +92,22 @@ function AddNoteModal({ onClose, onSaved }) {
   )
 }
 
-export default function NotesTab({ studentProfileId }) {
+export default function NotesTab({ studentProfileId, personId }) {
   const [notes, setNotes]       = useState([])
   const [loading, setLoading]   = useState(true)
   const [showModal, setShowModal] = useState(false)
 
   const fetchNotes = useCallback(async () => {
+    const col = personId ? 'person_id' : 'student_profile_id'
+    const val = personId || studentProfileId
     const { data, error } = await supabase
       .from('student_notes')
       .select('*, profiles:admin_id(full_name)')
-      .eq('student_profile_id', studentProfileId)
+      .eq(col, val)
       .order('created_at', { ascending: false })
     if (!error) setNotes(data || [])
     setLoading(false)
-  }, [studentProfileId])
+  }, [personId, studentProfileId])
 
   useEffect(() => { fetchNotes() }, [fetchNotes])
 
@@ -146,7 +151,7 @@ export default function NotesTab({ studentProfileId }) {
       {showModal && (
         <AddNoteModal
           onClose={() => setShowModal(false)}
-          onSaved={{ studentProfileId, refresh: fetchNotes }}
+          onSaved={{ studentProfileId, personId, refresh: fetchNotes }}
         />
       )}
     </div>

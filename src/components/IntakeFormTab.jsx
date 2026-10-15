@@ -635,10 +635,11 @@ function EditMode({
 }
 
 // ── Main export ───────────────────────────────────────────────────────────────
-// Accepts either enquiryId (lead form) or studentProfileId (student form).
+// Accepts personId (People profile), enquiryId (lead form), or studentProfileId (student form).
+// When personId is provided it tries three lookups: person_id → student_profile_id → enquiry_id.
 // prefill: object of field values to pre-populate when creating a new form.
 // onSave: called after a successful save (e.g. to refresh parent state).
-export default function IntakeFormTab({ studentProfileId, enquiryId, prefill, onSave }) {
+export default function IntakeFormTab({ studentProfileId, enquiryId, personId, prefill, onSave }) {
   const [form, setForm]             = useState({ ...EMPTY })
   const [existing, setExisting]     = useState(null)
   const [editing, setEditing]       = useState(false)
@@ -662,18 +663,43 @@ export default function IntakeFormTab({ studentProfileId, enquiryId, prefill, on
     setEditing(false)
     setError('')
 
-    const query = enquiryId
-      ? supabase.from('intake_forms').select('*').eq('enquiry_id', enquiryId).maybeSingle()
-      : supabase.from('intake_forms').select('*').eq('student_profile_id', studentProfileId).maybeSingle()
+    async function load() {
+      let data = null
 
-    query.then(({ data, error: err }) => {
-      if (!err && data) {
+      if (personId) {
+        // 1. direct person_id lookup
+        const { data: byPerson } = await supabase.from('intake_forms').select('*').eq('person_id', personId).maybeSingle()
+        data = byPerson
+
+        // 2. fallback: student_profile_id (PWA account)
+        if (!data && studentProfileId) {
+          const { data: byProfile } = await supabase.from('intake_forms').select('*').eq('student_profile_id', studentProfileId).maybeSingle()
+          data = byProfile
+        }
+
+        // 3. fallback: via any enquiry linked to this person
+        if (!data) {
+          const { data: enquiries } = await supabase.from('enquiries').select('id').eq('person_id', personId)
+          if (enquiries?.length) {
+            const ids = enquiries.map(e => e.id)
+            const { data: byEnquiry } = await supabase.from('intake_forms').select('*').in('enquiry_id', ids).maybeSingle()
+            data = byEnquiry
+          }
+        }
+      } else if (enquiryId) {
+        const { data: d } = await supabase.from('intake_forms').select('*').eq('enquiry_id', enquiryId).maybeSingle()
+        data = d
+      } else if (studentProfileId) {
+        const { data: d } = await supabase.from('intake_forms').select('*').eq('student_profile_id', studentProfileId).maybeSingle()
+        data = d
+      }
+
+      if (data) {
         setExisting(data)
         setForm(data)
         if (data.photo_path) {
-          supabase.storage.from('registration-photos')
-            .createSignedUrl(data.photo_path, 3600)
-            .then(({ data: urlData }) => setPhotoSignedUrl(urlData?.signedUrl || null))
+          const { data: urlData } = await supabase.storage.from('registration-photos').createSignedUrl(data.photo_path, 3600)
+          setPhotoSignedUrl(urlData?.signedUrl || null)
         }
       } else {
         setExisting(null)
@@ -686,8 +712,10 @@ export default function IntakeFormTab({ studentProfileId, enquiryId, prefill, on
         setForm(base)
       }
       setLoading(false)
-    })
-  }, [enquiryId, studentProfileId]) // eslint-disable-line react-hooks/exhaustive-deps
+    }
+
+    load()
+  }, [personId, enquiryId, studentProfileId]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function handlePhotoChange(e) {
     const file = e.target.files?.[0]
@@ -722,7 +750,7 @@ export default function IntakeFormTab({ studentProfileId, enquiryId, prefill, on
     setError('')
 
     try {
-      const ownerId = enquiryId || studentProfileId
+      const ownerId = personId || enquiryId || studentProfileId
 
       let newPhotoPath = form.photo_path || null
       if (photoFile) {
@@ -741,12 +769,17 @@ export default function IntakeFormTab({ studentProfileId, enquiryId, prefill, on
       }
 
       const { id: _id, created_at: _ca, updated_at: _ua, bmi: _bmi,
-              enquiry_id: _ei, student_profile_id: _sp, ...rest } = form
+              enquiry_id: _ei, student_profile_id: _sp, person_id: _pid, ...rest } = form
 
       const payload = {
         ...sanitizeForDb(rest),
         photo_path: newPhotoPath,
-        ...(enquiryId ? { enquiry_id: enquiryId } : { student_profile_id: studentProfileId }),
+        ...(personId && { person_id: personId }),
+        ...(enquiryId && { enquiry_id: enquiryId }),
+        ...(studentProfileId && !personId && { student_profile_id: studentProfileId }),
+        // when using personId, preserve existing owner links already on the row
+        ...(personId && existing?.enquiry_id && !enquiryId && { enquiry_id: existing.enquiry_id }),
+        ...(personId && existing?.student_profile_id && !studentProfileId && { student_profile_id: existing.student_profile_id }),
       }
 
       const result = existing
