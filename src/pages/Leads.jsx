@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { Plus, X, Phone, Mail, MapPin, BookOpen, Tag, Calendar, Trash2, Check, Pencil, FileText } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
@@ -55,6 +56,9 @@ export default function Leads() {
   const [saving, setSaving] = useState(false)
   const [showEnrollConfirm, setShowEnrollConfirm] = useState(false)
   const [enrolling, setEnrolling] = useState(false)
+  const [enrollError, setEnrollError] = useState('')
+  const [multipleMatches, setMultipleMatches] = useState([])
+  const [enrolledPersonId, setEnrolledPersonId] = useState(null)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [saveError, setSaveError] = useState('')
@@ -180,6 +184,9 @@ export default function Leads() {
   function handleStatusChange(e) {
     const status = e.target.value
     if (status === 'enrolled' && selectedLead.status !== 'enrolled') {
+      setEnrollError('')
+      setMultipleMatches([])
+      setEnrolledPersonId(null)
       setShowEnrollConfirm(true)
     } else {
       applyStatusChange(status)
@@ -199,10 +206,69 @@ export default function Leads() {
     }
   }
 
+  function closeEnrollModal() {
+    setShowEnrollConfirm(false)
+    setEnrollError('')
+    setMultipleMatches([])
+    setEnrolledPersonId(null)
+  }
+
+  function parseMultipleMatches(raw) {
+    const re = /([^,]+?)\s\(([0-9a-f-]{36})\)/g
+    const results = []
+    let m
+    while ((m = re.exec(raw)) !== null) {
+      results.push({ name: m[1].trim(), id: m[2] })
+    }
+    return results
+  }
+
   async function handleConfirmEnroll() {
     setEnrolling(true)
-    await applyStatusChange('enrolled')
-    setShowEnrollConfirm(false)
+    setEnrollError('')
+    const { data: personId, error } = await supabase.rpc('enrol_lead_as_person', {
+      p_enquiry_id: selectedLead.id,
+    })
+    if (error) {
+      if (error.message?.startsWith('MULTIPLE_MATCHES')) {
+        setMultipleMatches(parseMultipleMatches(error.details || ''))
+      } else {
+        setEnrollError(error.message)
+      }
+      setEnrolling(false)
+      return
+    }
+    const updated = { ...selectedLead, person_id: personId, status: 'enrolled' }
+    setSelectedLead(updated)
+    setEnquiries(prev => prev.map(e => e.id === updated.id ? updated : e))
+    setEnrolledPersonId(personId)
+    setEnrolling(false)
+  }
+
+  async function handlePickPerson(personId) {
+    setEnrolling(true)
+    setEnrollError('')
+    const { error: updateErr } = await supabase
+      .from('enquiries')
+      .update({ person_id: personId })
+      .eq('id', selectedLead.id)
+    if (updateErr) {
+      setEnrollError(updateErr.message)
+      setEnrolling(false)
+      return
+    }
+    const { data: returnedId, error } = await supabase.rpc('enrol_lead_as_person', {
+      p_enquiry_id: selectedLead.id,
+    })
+    if (error) {
+      setEnrollError(error.message)
+      setEnrolling(false)
+      return
+    }
+    const updated = { ...selectedLead, person_id: returnedId, status: 'enrolled' }
+    setSelectedLead(updated)
+    setEnquiries(prev => prev.map(e => e.id === updated.id ? updated : e))
+    setEnrolledPersonId(returnedId)
     setEnrolling(false)
   }
 
@@ -493,6 +559,14 @@ export default function Leads() {
                     {selectedLead.notes}
                   </div>
                 )}
+                {selectedLead.person_id && (
+                  <Link
+                    to={`/people/${selectedLead.person_id}`}
+                    className="flex items-center gap-1.5 mt-2 text-sm text-[#1742b5] hover:underline"
+                  >
+                    Person: view profile →
+                  </Link>
+                )}
               </div>
 
               {/* Registration Form */}
@@ -710,35 +784,104 @@ export default function Leads() {
         </div>
       )}
 
-      {/* ── Enroll Confirmation ── */}
+      {/* ── Enrol Confirmation ── */}
       {showEnrollConfirm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl">
-            <div className="text-center mb-5">
-              <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-3">
-                <span className="text-green-600 text-xl font-bold">✓</span>
-              </div>
-              <h3 className="font-bold text-gray-900">Create Student Enrollment?</h3>
-              <p className="text-sm text-gray-500 mt-2 leading-relaxed">
-                Mark <strong>{selectedLead?.name}</strong> as Enrolled? You can create their full course
-                enrollment record in the <span className="text-[#1742b5] font-medium">Connect Students</span> section.
-              </p>
-            </div>
-            <div className="space-y-2">
-              <button
-                onClick={handleConfirmEnroll}
-                disabled={enrolling}
-                className="w-full bg-green-600 text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-green-700 transition-colors disabled:opacity-50"
-              >
-                {enrolling ? 'Updating...' : 'Yes, Mark as Enrolled'}
-              </button>
-              <button
-                onClick={() => setShowEnrollConfirm(false)}
-                className="w-full border border-gray-300 text-gray-700 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
+
+            {enrolledPersonId ? (
+              /* ── Success ── */
+              <>
+                <div className="text-center mb-5">
+                  <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                    <span className="text-green-600 text-xl font-bold">✓</span>
+                  </div>
+                  <h3 className="font-bold text-gray-900">Enrolled!</h3>
+                  <p className="text-sm text-gray-500 mt-2">
+                    <strong>{selectedLead?.name}</strong> is now linked to a People profile.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Link
+                    to={`/people/${enrolledPersonId}`}
+                    onClick={closeEnrollModal}
+                    className="flex items-center justify-center w-full bg-[#1742b5] text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-[#1338a0] transition-colors"
+                  >
+                    View People profile →
+                  </Link>
+                  <button
+                    onClick={closeEnrollModal}
+                    className="w-full border border-gray-300 text-gray-700 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+                  >
+                    Done
+                  </button>
+                </div>
+              </>
+            ) : multipleMatches.length > 0 ? (
+              /* ── Picker ── */
+              <>
+                <div className="mb-4">
+                  <h3 className="font-bold text-gray-900 mb-1">Multiple people match this phone</h3>
+                  <p className="text-sm text-gray-500">
+                    Which person is <strong>{selectedLead?.name}</strong>?
+                  </p>
+                </div>
+                <div className="space-y-2 mb-4">
+                  {multipleMatches.map(m => (
+                    <button
+                      key={m.id}
+                      onClick={() => handlePickPerson(m.id)}
+                      disabled={enrolling}
+                      className="w-full text-left px-4 py-2.5 border border-gray-200 rounded-lg text-sm text-gray-800 hover:border-[#1742b5] hover:bg-blue-50 transition-colors disabled:opacity-50"
+                    >
+                      {m.name}
+                    </button>
+                  ))}
+                </div>
+                {enrollError && (
+                  <p className="text-sm text-red-600 mb-3 text-center">{enrollError}</p>
+                )}
+                <button
+                  onClick={closeEnrollModal}
+                  className="w-full border border-gray-300 text-gray-700 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              /* ── Initial / loading ── */
+              <>
+                <div className="text-center mb-5">
+                  <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                    <span className="text-green-600 text-xl font-bold">✓</span>
+                  </div>
+                  <h3 className="font-bold text-gray-900">Enrol as Person?</h3>
+                  <p className="text-sm text-gray-500 mt-2 leading-relaxed">
+                    Create a People profile for <strong>{selectedLead?.name}</strong> and move
+                    them to the Enrolled stage.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <button
+                    onClick={handleConfirmEnroll}
+                    disabled={enrolling}
+                    className="w-full bg-green-600 text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-green-700 transition-colors disabled:opacity-50"
+                  >
+                    {enrolling ? 'Enrolling…' : 'Yes, Enrol'}
+                  </button>
+                  {enrollError && (
+                    <p className="text-sm text-red-600 text-center">{enrollError}</p>
+                  )}
+                  <button
+                    onClick={closeEnrollModal}
+                    className="w-full border border-gray-300 text-gray-700 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
+
           </div>
         </div>
       )}
