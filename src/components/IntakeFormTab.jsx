@@ -1,39 +1,37 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 
 // ── Option lists ──────────────────────────────────────────────────────────────
-const SEX_OPTS          = ['Male', 'Female', 'Other']
-const MARITAL_OPTS      = ['Single', 'Married', 'Divorced', 'Widowed']
-const SOURCE_OPTS       = ['Walk-in', 'Referral', 'Social Media', 'Website', 'WhatsApp', 'Other']
-const COURSE_OPTS       = [
-  'Regular Yoga',
-  'Araiki Local',
-  'Araiki Foreigner',
-  'Amasana / Inner Mastery Circle',
-  'TTC',
-  'Free Workshop',
+const SEX_OPTS     = ['Male', 'Female', 'Other']
+const MARITAL_OPTS = ['Single', 'Married', 'Divorced', 'Widowed']
+const SOURCE_OPTS  = ['Walk-in', 'Referral', 'Social Media', 'Website', 'WhatsApp', 'Other']
+const COURSE_OPTS  = [
+  'Regular Yoga', 'Araiki Local', 'Araiki Foreigner',
+  'Amasana / Inner Mastery Circle', 'TTC', 'Free Workshop',
 ]
-const FOOD_OPTS         = ['Vegetarian', 'Non-vegetarian']
-const APPETITE_OPTS     = ['Normal', 'Poor']
-const SLEEP_OPTS        = ['Normal', 'Disturbed']
-const BOWELS_OPTS       = ['Normal', 'Constipation', 'Loose']
-const BLADDER_OPTS      = ['Normal', 'Intermittent']
-const COLOUR_OPTS       = ['Red', 'Orange', 'Yellow', 'Green', 'Blue', 'Indigo', 'Violet', 'White', 'Black', 'Brown']
-const TASTE_OPTS        = ['Sweet', 'Sour', 'Salty', 'Bitter', 'Pungent', 'Astringent']
+const FOOD_OPTS    = ['Vegetarian', 'Non-vegetarian']
+const APPETITE_OPTS = ['Normal', 'Poor']
+const SLEEP_OPTS   = ['Normal', 'Disturbed']
+const BOWELS_OPTS  = ['Normal', 'Constipation', 'Loose']
+const BLADDER_OPTS = ['Normal', 'Intermittent']
+const COLOUR_OPTS  = ['Red', 'Orange', 'Yellow', 'Green', 'Blue', 'Indigo', 'Violet', 'White', 'Black', 'Brown']
+const TASTE_OPTS   = ['Sweet', 'Sour', 'Salty', 'Bitter', 'Pungent', 'Astringent']
 
 const EMPTY = {
   full_name: '', date_of_birth: '', sex: '', marital_status: '', profession: '',
   education: '', address: '', pin_code: '', phone: '', email: '', source: '',
   registration_date: '',
-  course: '', previous_yoga_experience: false, previous_yoga_details: '',
+  course: '', venue: '', previous_yoga_experience: false, previous_yoga_details: '',
   protocol_assigned: '', practices_prescribed: '',
   current_conditions: false, current_conditions_details: '', chief_complaints: '',
+  symptoms: '', treatment_details: '', present_state: '',
   history_of_illness: '', past_history: '', family_history: '',
   food_type: '', appetite: '', sleep: '', waking_time: '', bowels: '', bladder: '',
-  smoking: false, alcohol: false, exercise_pattern: '',
+  smoking: false, alcohol: false, cigarettes_per_day: '', drug_use: '', exercise_pattern: '',
   favourite_colour: '', favourite_taste: '', preferred_number_1: '', preferred_number_2: '',
   height_cm: '', weight_kg: '', pulse_bpm: '', systolic_bp: '', diastolic_bp: '',
   respiratory_rate: '',
+  photo_path: '',
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -47,6 +45,35 @@ function clampNum(val, min, max) {
   const n = parseInt(val, 10)
   if (isNaN(n)) return ''
   return Math.min(max, Math.max(min, n))
+}
+
+async function processPhotoToBlob(file) {
+  const url = URL.createObjectURL(file)
+  const img = new Image()
+  img.src = url
+  await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject })
+  URL.revokeObjectURL(url)
+
+  const TARGET = 7 / 9
+  const { naturalWidth: srcW, naturalHeight: srcH } = img
+  let sx, sy, sw, sh
+  if (srcW / srcH > TARGET) {
+    sh = srcH; sw = Math.round(srcH * TARGET); sx = Math.round((srcW - sw) / 2); sy = 0
+  } else {
+    sw = srcW; sh = Math.round(srcW / TARGET); sx = 0; sy = Math.round((srcH - sh) / 2)
+  }
+
+  const scale = Math.min(1, 560 / sw)
+  const outW = Math.round(sw * scale)
+  const outH = Math.round(sh * scale)
+
+  const canvas = document.createElement('canvas')
+  canvas.width = outW; canvas.height = outH
+  canvas.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, outW, outH)
+
+  return new Promise((resolve, reject) =>
+    canvas.toBlob(b => b ? resolve(b) : reject(new Error('Canvas empty')), 'image/jpeg', 0.85)
+  )
 }
 
 // ── Primitive field components ────────────────────────────────────────────────
@@ -112,16 +139,8 @@ function Toggle({ value, onChange }) {
       onClick={() => onChange(!value)}
       className="flex items-center gap-2.5 w-fit"
     >
-      <div
-        className={`w-10 h-5 rounded-full relative transition-colors ${
-          value ? 'bg-[#1742b5]' : 'bg-gray-200'
-        }`}
-      >
-        <div
-          className={`w-4 h-4 bg-white rounded-full absolute top-0.5 shadow-sm transition-transform ${
-            value ? 'translate-x-5' : 'translate-x-0.5'
-          }`}
-        />
+      <div className={`w-10 h-5 rounded-full relative transition-colors ${value ? 'bg-[#1742b5]' : 'bg-gray-200'}`}>
+        <div className={`w-4 h-4 bg-white rounded-full absolute top-0.5 shadow-sm transition-transform ${value ? 'translate-x-5' : 'translate-x-0.5'}`} />
       </div>
       <span className={`text-sm font-medium ${value ? 'text-[#1742b5]' : 'text-gray-400'}`}>
         {value ? 'Yes' : 'No'}
@@ -142,7 +161,66 @@ function SectionHeader({ n, title }) {
   )
 }
 
-// ── View mode display ─────────────────────────────────────────────────────────
+// ── Passport photo box ────────────────────────────────────────────────────────
+function Silhouette() {
+  return (
+    <svg viewBox="0 0 70 90" fill="none" xmlns="http://www.w3.org/2000/svg"
+         style={{ width: '55%', height: '55%' }}>
+      <circle cx="35" cy="28" r="18" fill="#d1d5db" />
+      <path d="M5 90 Q5 62 35 62 Q65 62 65 90 Z" fill="#d1d5db" />
+    </svg>
+  )
+}
+
+function PhotoBox({ editable, photoPreviewUrl, photoSignedUrl, photoError, onPhotoChange, onPhotoRemove }) {
+  const fileRef = useRef(null)
+  const displaySrc = photoPreviewUrl || photoSignedUrl
+
+  return (
+    <div className="flex flex-col items-center gap-2 flex-shrink-0">
+      <span className="text-xs font-medium text-gray-400 uppercase tracking-wide">Photo</span>
+      <div
+        style={{ width: '140px', height: '180px' }}
+        className="border-2 border-dashed border-gray-200 rounded-lg overflow-hidden bg-gray-50 flex items-center justify-center"
+      >
+        {displaySrc
+          ? <img src={displaySrc} alt="Passport photo" className="w-full h-full object-cover" />
+          : <Silhouette />
+        }
+      </div>
+      {editable && (
+        <>
+          <div className="flex gap-1.5">
+            <label className="cursor-pointer px-2.5 py-1.5 text-xs font-medium bg-[#1742b5] text-white rounded-lg hover:bg-[#1338a0] transition-colors">
+              {displaySrc ? 'Replace' : 'Upload'}
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="sr-only"
+                onChange={onPhotoChange}
+              />
+            </label>
+            {displaySrc && (
+              <button
+                type="button"
+                onClick={onPhotoRemove}
+                className="px-2.5 py-1.5 text-xs font-medium border border-red-200 text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+              >
+                Remove
+              </button>
+            )}
+          </div>
+          {photoError && (
+            <p className="text-[11px] text-red-500 text-center" style={{ maxWidth: '140px' }}>{photoError}</p>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── View mode ─────────────────────────────────────────────────────────────────
 function ViewCell({ label, value, col }) {
   if (value === null || value === undefined || value === '') return null
   const display = typeof value === 'boolean' ? (value ? 'Yes' : 'No') : String(value)
@@ -163,12 +241,12 @@ function ViewSection({ n, title, children }) {
   )
 }
 
-// ── View mode ─────────────────────────────────────────────────────────────────
-function ViewMode({ form, onEdit }) {
+function ViewMode({ form, photoSignedUrl, onEdit }) {
   const bmi = calcBMI(form.height_cm, form.weight_kg)
   return (
     <div className="space-y-5">
-      <div className="flex justify-end">
+      <div className="flex items-start justify-between">
+        <PhotoBox editable={false} photoSignedUrl={photoSignedUrl} />
         <button
           onClick={onEdit}
           className="px-4 py-2 text-sm font-medium bg-[#1742b5] text-white rounded-lg hover:bg-[#1330a0] transition-colors"
@@ -178,49 +256,55 @@ function ViewMode({ form, onEdit }) {
       </div>
 
       <ViewSection n="1" title="Basic Info">
-        <ViewCell label="Full Name"        value={form.full_name} />
-        <ViewCell label="Date of Birth"    value={form.date_of_birth} />
-        <ViewCell label="Sex"              value={form.sex} />
-        <ViewCell label="Marital Status"   value={form.marital_status} />
-        <ViewCell label="Profession"       value={form.profession} />
-        <ViewCell label="Education"        value={form.education} />
-        <ViewCell label="Phone"            value={form.phone} />
-        <ViewCell label="Email"            value={form.email} />
-        <ViewCell label="Pin Code"         value={form.pin_code} />
-        <ViewCell label="Source"           value={form.source} />
+        <ViewCell label="Full Name"         value={form.full_name} />
+        <ViewCell label="Date of Birth"     value={form.date_of_birth} />
+        <ViewCell label="Sex"               value={form.sex} />
+        <ViewCell label="Marital Status"    value={form.marital_status} />
+        <ViewCell label="Profession"        value={form.profession} />
+        <ViewCell label="Education"         value={form.education} />
+        <ViewCell label="Phone"             value={form.phone} />
+        <ViewCell label="Email"             value={form.email} />
+        <ViewCell label="Pin Code"          value={form.pin_code} />
+        <ViewCell label="Source"            value={form.source} />
         <ViewCell label="Registration Date" value={form.registration_date} />
-        <ViewCell label="Address"          value={form.address} col={3} />
+        <ViewCell label="Address"           value={form.address} col={3} />
       </ViewSection>
 
       <ViewSection n="2" title="Program">
-        <ViewCell label="Course"                    value={form.course} />
-        <ViewCell label="Previous Yoga Experience"  value={form.previous_yoga_experience} />
+        <ViewCell label="Course"                   value={form.course} />
+        <ViewCell label="Venue"                    value={form.venue} />
+        <ViewCell label="Previous Yoga Experience" value={form.previous_yoga_experience} />
         {form.previous_yoga_experience &&
-          <ViewCell label="Experience Details" value={form.previous_yoga_details} />}
-        <ViewCell label="Protocol Assigned"   value={form.protocol_assigned} />
-        <ViewCell label="Practices Prescribed" value={form.practices_prescribed} col={3} />
+          <ViewCell label="Experience Details"     value={form.previous_yoga_details} />}
+        <ViewCell label="Protocol Assigned"        value={form.protocol_assigned} />
+        <ViewCell label="Practices Prescribed"     value={form.practices_prescribed} col={3} />
       </ViewSection>
 
       <ViewSection n="3" title="Health Background">
-        <ViewCell label="Current Conditions"         value={form.current_conditions} />
+        <ViewCell label="Current Conditions"   value={form.current_conditions} />
         {form.current_conditions &&
-          <ViewCell label="Condition Details" value={form.current_conditions_details} col={2} />}
-        <ViewCell label="Chief Complaints"    value={form.chief_complaints}    col={3} />
-        <ViewCell label="History of Illness"  value={form.history_of_illness}  col={3} />
-        <ViewCell label="Past History"        value={form.past_history}        col={3} />
-        <ViewCell label="Family History"      value={form.family_history}      col={3} />
+          <ViewCell label="Condition Details"  value={form.current_conditions_details} col={2} />}
+        <ViewCell label="Chief Complaints"     value={form.chief_complaints}    col={3} />
+        <ViewCell label="Symptoms"             value={form.symptoms}             col={3} />
+        <ViewCell label="Treatment Details"    value={form.treatment_details}   col={3} />
+        <ViewCell label="Present State"        value={form.present_state}       col={3} />
+        <ViewCell label="History of Illness"   value={form.history_of_illness}  col={3} />
+        <ViewCell label="Past History"         value={form.past_history}        col={3} />
+        <ViewCell label="Family History"       value={form.family_history}      col={3} />
       </ViewSection>
 
       <ViewSection n="4" title="Lifestyle">
-        <ViewCell label="Food Type"        value={form.food_type} />
-        <ViewCell label="Appetite"         value={form.appetite} />
-        <ViewCell label="Sleep"            value={form.sleep} />
-        <ViewCell label="Waking Time"      value={form.waking_time} />
-        <ViewCell label="Bowels"           value={form.bowels} />
-        <ViewCell label="Bladder"          value={form.bladder} />
-        <ViewCell label="Smoking"          value={form.smoking} />
-        <ViewCell label="Alcohol"          value={form.alcohol} />
-        <ViewCell label="Exercise Pattern" value={form.exercise_pattern} col={3} />
+        <ViewCell label="Food Type"         value={form.food_type} />
+        <ViewCell label="Appetite"          value={form.appetite} />
+        <ViewCell label="Sleep"             value={form.sleep} />
+        <ViewCell label="Waking Time"       value={form.waking_time} />
+        <ViewCell label="Bowels"            value={form.bowels} />
+        <ViewCell label="Bladder"           value={form.bladder} />
+        <ViewCell label="Smoking"           value={form.smoking} />
+        {form.smoking && <ViewCell label="Cigarettes / Day" value={form.cigarettes_per_day} />}
+        <ViewCell label="Alcohol"           value={form.alcohol} />
+        <ViewCell label="Drug Use"          value={form.drug_use} />
+        <ViewCell label="Exercise Pattern"  value={form.exercise_pattern} col={3} />
       </ViewSection>
 
       <ViewSection n="5" title="NYG Assessment">
@@ -231,20 +315,23 @@ function ViewMode({ form, onEdit }) {
       </ViewSection>
 
       <ViewSection n="6" title="Vitals">
-        <ViewCell label="Height (cm)"       value={form.height_cm} />
-        <ViewCell label="Weight (kg)"       value={form.weight_kg} />
-        <ViewCell label="BMI"               value={bmi || '—'} />
-        <ViewCell label="Pulse (bpm)"       value={form.pulse_bpm} />
-        <ViewCell label="Systolic BP"       value={form.systolic_bp ? `${form.systolic_bp} mmHg` : ''} />
-        <ViewCell label="Diastolic BP"      value={form.diastolic_bp ? `${form.diastolic_bp} mmHg` : ''} />
-        <ViewCell label="Respiratory Rate"  value={form.respiratory_rate ? `${form.respiratory_rate} /min` : ''} />
+        <ViewCell label="Height (cm)"      value={form.height_cm} />
+        <ViewCell label="Weight (kg)"      value={form.weight_kg} />
+        <ViewCell label="BMI"              value={bmi || '—'} />
+        <ViewCell label="Pulse (bpm)"      value={form.pulse_bpm} />
+        <ViewCell label="Systolic BP"      value={form.systolic_bp ? `${form.systolic_bp} mmHg` : ''} />
+        <ViewCell label="Diastolic BP"     value={form.diastolic_bp ? `${form.diastolic_bp} mmHg` : ''} />
+        <ViewCell label="Respiratory Rate" value={form.respiratory_rate ? `${form.respiratory_rate} /min` : ''} />
       </ViewSection>
     </div>
   )
 }
 
 // ── Edit / New mode ───────────────────────────────────────────────────────────
-function EditMode({ form, setForm, onSave, onCancel, saving, error, isNew }) {
+function EditMode({
+  form, setForm, onSave, onCancel, saving, error, isNew,
+  photoPreviewUrl, photoSignedUrl, photoError, onPhotoChange, onPhotoRemove,
+}) {
   const set = key => val => setForm(prev => ({ ...prev, [key]: val }))
   const bmi = calcBMI(form.height_cm, form.weight_kg)
 
@@ -255,6 +342,16 @@ function EditMode({ form, setForm, onSave, onCancel, saving, error, isNew }) {
           {error}
         </div>
       )}
+
+      {/* Passport photo */}
+      <PhotoBox
+        editable
+        photoPreviewUrl={photoPreviewUrl}
+        photoSignedUrl={photoSignedUrl}
+        photoError={photoError}
+        onPhotoChange={onPhotoChange}
+        onPhotoRemove={onPhotoRemove}
+      />
 
       {/* Section 1 — Basic Info */}
       <div className="bg-white rounded-xl border border-gray-200 p-6">
@@ -306,6 +403,9 @@ function EditMode({ form, setForm, onSave, onCancel, saving, error, isNew }) {
           <Field label="Course">
             <Select value={form.course} onChange={set('course')} options={COURSE_OPTS} />
           </Field>
+          <Field label="Venue">
+            <Input value={form.venue} onChange={set('venue')} placeholder="Class venue or meeting link" />
+          </Field>
           <Field label="Previous Yoga Experience">
             <div className="py-1.5">
               <Toggle value={form.previous_yoga_experience} onChange={set('previous_yoga_experience')} />
@@ -313,22 +413,14 @@ function EditMode({ form, setForm, onSave, onCancel, saving, error, isNew }) {
           </Field>
           {form.previous_yoga_experience && (
             <Field label="Experience Details">
-              <Input
-                value={form.previous_yoga_details}
-                onChange={set('previous_yoga_details')}
-                placeholder="Describe prior yoga practice"
-              />
+              <Input value={form.previous_yoga_details} onChange={set('previous_yoga_details')} placeholder="Describe prior yoga practice" />
             </Field>
           )}
           <Field label="Protocol Assigned">
             <Input value={form.protocol_assigned} onChange={set('protocol_assigned')} placeholder="Protocol name or code" />
           </Field>
           <Field label="Practices Prescribed" col={3}>
-            <Textarea
-              value={form.practices_prescribed}
-              onChange={set('practices_prescribed')}
-              placeholder="List all prescribed practices…"
-            />
+            <Textarea value={form.practices_prescribed} onChange={set('practices_prescribed')} placeholder="List all prescribed practices…" />
           </Field>
         </div>
       </div>
@@ -344,15 +436,20 @@ function EditMode({ form, setForm, onSave, onCancel, saving, error, isNew }) {
           </Field>
           {form.current_conditions && (
             <Field label="Condition Details" col={2}>
-              <Input
-                value={form.current_conditions_details}
-                onChange={set('current_conditions_details')}
-                placeholder="Describe current health conditions"
-              />
+              <Input value={form.current_conditions_details} onChange={set('current_conditions_details')} placeholder="Describe current health conditions" />
             </Field>
           )}
           <Field label="Chief Complaints" col={3}>
             <Textarea value={form.chief_complaints} onChange={set('chief_complaints')} placeholder="Primary complaints…" />
+          </Field>
+          <Field label="Symptoms" col={3}>
+            <Textarea value={form.symptoms} onChange={set('symptoms')} placeholder="Current symptoms…" />
+          </Field>
+          <Field label="Treatment Details" col={3}>
+            <Textarea value={form.treatment_details} onChange={set('treatment_details')} placeholder="Treatments undergone, medicines currently taken…" />
+          </Field>
+          <Field label="Present State" col={3}>
+            <Textarea value={form.present_state} onChange={set('present_state')} placeholder="Current condition / present state…" />
           </Field>
           <Field label="History of Illness" col={3}>
             <Textarea value={form.history_of_illness} onChange={set('history_of_illness')} placeholder="Previous illnesses and treatments…" />
@@ -393,10 +490,23 @@ function EditMode({ form, setForm, onSave, onCancel, saving, error, isNew }) {
               <Toggle value={form.smoking} onChange={set('smoking')} />
             </div>
           </Field>
+          {form.smoking && (
+            <Field label="Cigarettes / Day">
+              <Input
+                type="number"
+                value={form.cigarettes_per_day}
+                onChange={val => set('cigarettes_per_day')(val === '' ? '' : Math.max(0, parseInt(val, 10) || 0))}
+                placeholder="e.g. 5"
+              />
+            </Field>
+          )}
           <Field label="Alcohol">
             <div className="py-1.5">
               <Toggle value={form.alcohol} onChange={set('alcohol')} />
             </div>
+          </Field>
+          <Field label="Drug Use">
+            <Input value={form.drug_use} onChange={set('drug_use')} placeholder="Specify if any…" />
           </Field>
           <Field label="Exercise Pattern" col={3}>
             <Input value={form.exercise_pattern} onChange={set('exercise_pattern')} placeholder="Describe exercise habits…" />
@@ -486,55 +596,157 @@ function EditMode({ form, setForm, onSave, onCancel, saving, error, isNew }) {
 }
 
 // ── Main export ───────────────────────────────────────────────────────────────
-export default function IntakeFormTab({ studentProfileId }) {
-  const [form, setForm]       = useState({ ...EMPTY })
-  const [existing, setExisting] = useState(null)
-  const [editing, setEditing] = useState(false)
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving]   = useState(false)
-  const [error, setError]     = useState('')
+// Accepts either enquiryId (lead form) or studentProfileId (student form).
+// prefill: object of field values to pre-populate when creating a new form.
+// onSave: called after a successful save (e.g. to refresh parent state).
+export default function IntakeFormTab({ studentProfileId, enquiryId, prefill, onSave }) {
+  const [form, setForm]             = useState({ ...EMPTY })
+  const [existing, setExisting]     = useState(null)
+  const [editing, setEditing]       = useState(false)
+  const [loading, setLoading]       = useState(true)
+  const [saving, setSaving]         = useState(false)
+  const [error, setError]           = useState('')
+
+  const [photoFile, setPhotoFile]           = useState(null)
+  const [photoPreviewUrl, setPhotoPreviewUrl] = useState(null)
+  const [photoSignedUrl, setPhotoSignedUrl] = useState(null)
+  const [photoRemoved, setPhotoRemoved]     = useState(false)
+  const [photoError, setPhotoError]         = useState('')
 
   useEffect(() => {
     setLoading(true)
-    supabase
-      .from('intake_forms')
-      .select('*')
-      .eq('student_profile_id', studentProfileId)
-      .maybeSingle()
-      .then(({ data, error: err }) => {
-        if (!err && data) {
-          setExisting(data)
-          setForm(data)
-        } else {
-          setForm({ ...EMPTY })
+    setPhotoFile(null)
+    setPhotoPreviewUrl(null)
+    setPhotoSignedUrl(null)
+    setPhotoRemoved(false)
+    setPhotoError('')
+    setEditing(false)
+    setError('')
+
+    const query = enquiryId
+      ? supabase.from('intake_forms').select('*').eq('enquiry_id', enquiryId).maybeSingle()
+      : supabase.from('intake_forms').select('*').eq('student_profile_id', studentProfileId).maybeSingle()
+
+    query.then(({ data, error: err }) => {
+      if (!err && data) {
+        setExisting(data)
+        setForm(data)
+        if (data.photo_path) {
+          supabase.storage.from('registration-photos')
+            .createSignedUrl(data.photo_path, 3600)
+            .then(({ data: urlData }) => setPhotoSignedUrl(urlData?.signedUrl || null))
         }
-        setLoading(false)
-      })
-  }, [studentProfileId])
+      } else {
+        setExisting(null)
+        const base = { ...EMPTY }
+        if (prefill) {
+          Object.entries(prefill).forEach(([k, v]) => {
+            if (k in base && v !== undefined && v !== null && v !== '') base[k] = v
+          })
+        }
+        setForm(base)
+      }
+      setLoading(false)
+    })
+  }, [enquiryId, studentProfileId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function handlePhotoChange(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setPhotoError('Upload a JPEG, PNG, or WebP image')
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setPhotoError('Photo must be under 5 MB')
+      return
+    }
+    setPhotoError('')
+    if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl)
+    setPhotoFile(file)
+    setPhotoPreviewUrl(URL.createObjectURL(file))
+    setPhotoRemoved(false)
+  }
+
+  function handlePhotoRemove() {
+    if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl)
+    setPhotoFile(null)
+    setPhotoPreviewUrl(null)
+    setPhotoSignedUrl(null)
+    if (form.photo_path) setPhotoRemoved(true)
+    setPhotoError('')
+  }
 
   async function handleSave() {
     setSaving(true)
     setError('')
 
-    // strip DB-managed fields before sending
-    const { id: _id, created_at: _ca, updated_at: _ua, bmi: _bmi, ...rest } = form
-    const payload = { ...rest, student_profile_id: studentProfileId }
+    try {
+      const ownerId = enquiryId || studentProfileId
 
-    const result = existing
-      ? await supabase.from('intake_forms').update(payload).eq('id', existing.id).select().single()
-      : await supabase.from('intake_forms').insert(payload).select().single()
+      let newPhotoPath = form.photo_path || null
+      if (photoFile) {
+        const blob = await processPhotoToBlob(photoFile)
+        const path = `${ownerId}/photo.jpg`
+        const { error: uploadErr } = await supabase.storage
+          .from('registration-photos')
+          .upload(path, blob, { contentType: 'image/jpeg', upsert: true })
+        if (uploadErr) throw uploadErr
+        newPhotoPath = path
+      } else if (photoRemoved) {
+        if (form.photo_path) {
+          supabase.storage.from('registration-photos').remove([form.photo_path]).catch(() => {})
+        }
+        newPhotoPath = null
+      }
 
-    if (result.error) {
-      setError(result.error.message)
-    } else {
+      const { id: _id, created_at: _ca, updated_at: _ua, bmi: _bmi,
+              enquiry_id: _ei, student_profile_id: _sp, ...rest } = form
+
+      const payload = {
+        ...rest,
+        photo_path: newPhotoPath,
+        ...(enquiryId ? { enquiry_id: enquiryId } : { student_profile_id: studentProfileId }),
+      }
+
+      const result = existing
+        ? await supabase.from('intake_forms').update(payload).eq('id', existing.id).select().single()
+        : await supabase.from('intake_forms').insert(payload).select().single()
+
+      if (result.error) throw result.error
+
       setExisting(result.data)
       setForm(result.data)
+
+      if (result.data.photo_path) {
+        const { data: urlData } = await supabase.storage
+          .from('registration-photos')
+          .createSignedUrl(result.data.photo_path, 3600)
+        setPhotoSignedUrl(urlData?.signedUrl || null)
+      } else {
+        setPhotoSignedUrl(null)
+      }
+
+      if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl)
+      setPhotoFile(null)
+      setPhotoPreviewUrl(null)
+      setPhotoRemoved(false)
       setEditing(false)
+      onSave?.()
+    } catch (err) {
+      setError(err.message || 'Failed to save')
     }
+
     setSaving(false)
   }
 
   function handleCancel() {
+    if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl)
+    setPhotoFile(null)
+    setPhotoPreviewUrl(null)
+    setPhotoRemoved(false)
+    setPhotoError('')
     setForm(existing || { ...EMPTY })
     setEditing(false)
     setError('')
@@ -545,7 +757,13 @@ export default function IntakeFormTab({ studentProfileId }) {
   }
 
   if (existing && !editing) {
-    return <ViewMode form={form} onEdit={() => setEditing(true)} />
+    return (
+      <ViewMode
+        form={form}
+        photoSignedUrl={photoSignedUrl}
+        onEdit={() => setEditing(true)}
+      />
+    )
   }
 
   return (
@@ -557,6 +775,11 @@ export default function IntakeFormTab({ studentProfileId }) {
       saving={saving}
       error={error}
       isNew={!existing}
+      photoPreviewUrl={photoPreviewUrl}
+      photoSignedUrl={photoSignedUrl}
+      photoError={photoError}
+      onPhotoChange={handlePhotoChange}
+      onPhotoRemove={handlePhotoRemove}
     />
   )
 }

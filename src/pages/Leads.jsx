@@ -1,7 +1,12 @@
 import { useState, useEffect } from 'react'
-import { Plus, X, Phone, Mail, MapPin, BookOpen, Tag, Calendar, Trash2, Check, Pencil } from 'lucide-react'
+import { Plus, X, Phone, Mail, MapPin, BookOpen, Tag, Calendar, Trash2, Check, Pencil, FileText } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
+import IntakeFormTab from '../components/IntakeFormTab'
+
+// Form option lists mirrored from IntakeFormTab for prefill matching
+const SOURCE_FORM_OPTS = ['Walk-in', 'Referral', 'Social Media', 'Website', 'WhatsApp', 'Other']
+const COURSE_FORM_OPTS = ['Regular Yoga', 'Araiki Local', 'Araiki Foreigner', 'Amasana / Inner Mastery Circle', 'TTC', 'Free Workshop']
 
 const STAGES = ['new', 'contacted', 'interested', 'enrolled', 'lost']
 const STAGE_LABELS = { new: 'New', contacted: 'Contacted', interested: 'Interested', enrolled: 'Enrolled', lost: 'Lost' }
@@ -53,8 +58,10 @@ export default function Leads() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [formFilledIds, setFormFilledIds] = useState(new Set())
+  const [showRegForm, setShowRegForm] = useState(false)
 
-  useEffect(() => { fetchEnquiries() }, [])
+  useEffect(() => { fetchEnquiries(); fetchFormFilledIds() }, [])
 
   useEffect(() => {
     if (selectedLead) fetchNotes(selectedLead.id)
@@ -68,6 +75,18 @@ export default function Leads() {
       .order('created_at', { ascending: false })
     setEnquiries(data || [])
     setLoading(false)
+  }
+
+  async function fetchFormFilledIds() {
+    const { data } = await supabase
+      .from('intake_forms')
+      .select('enquiry_id')
+      .not('enquiry_id', 'is', null)
+    setFormFilledIds(new Set((data || []).map(r => r.enquiry_id)))
+  }
+
+  function handleRegFormSave() {
+    fetchFormFilledIds()
   }
 
   async function fetchNotes(enquiryId) {
@@ -276,7 +295,7 @@ export default function Leads() {
                 {/* Cards */}
                 <div className="flex-1 overflow-y-auto p-2 space-y-2">
                   {leads.map(lead => (
-                    <LeadCard key={lead.id} lead={lead} onClick={() => setSelectedLead(lead)} />
+                    <LeadCard key={lead.id} lead={lead} onClick={() => setSelectedLead(lead)} formFilled={formFilledIds.has(lead.id)} />
                   ))}
                   {!loading && leads.length === 0 && (
                     <p className="text-center text-gray-300 text-xs py-6">No leads</p>
@@ -476,6 +495,24 @@ export default function Leads() {
                 )}
               </div>
 
+              {/* Registration Form */}
+              <div className="p-5 border-b border-gray-100">
+                <div className="flex items-center justify-between mb-2.5">
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Registration Form</p>
+                  {formFilledIds.has(selectedLead.id)
+                    ? <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-green-100 text-green-700">Filled</span>
+                    : <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">Not filled</span>
+                  }
+                </div>
+                <button
+                  onClick={() => setShowRegForm(true)}
+                  className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-gray-200 text-sm font-medium text-gray-700 hover:bg-gray-50 hover:border-[#1742b5]/30 transition-colors"
+                >
+                  <FileText size={14} />
+                  {formFilledIds.has(selectedLead.id) ? 'View registration form' : 'Open registration form'}
+                </button>
+              </div>
+
               {/* Lead Type & Next Step */}
               <div className="p-5 border-b border-gray-100 space-y-3">
                 <div>
@@ -638,6 +675,41 @@ export default function Leads() {
         </div>
       )}
 
+      {/* ── Registration Form Modal ── */}
+      {showRegForm && selectedLead && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-6">
+          <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] flex flex-col shadow-2xl">
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between flex-shrink-0">
+              <div>
+                <h2 className="font-semibold text-gray-900">Registration Form</h2>
+                <p className="text-xs text-gray-400 mt-0.5">{selectedLead.name}</p>
+              </div>
+              <button
+                onClick={() => setShowRegForm(false)}
+                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-6">
+              <IntakeFormTab
+                enquiryId={selectedLead.id}
+                prefill={{
+                  full_name: selectedLead.name || '',
+                  phone: selectedLead.phone || '',
+                  email: selectedLead.email || '',
+                  address: selectedLead.location || '',
+                  registration_date: new Date().toISOString().split('T')[0],
+                  ...(SOURCE_FORM_OPTS.includes(selectedLead.source) ? { source: selectedLead.source } : {}),
+                  ...(COURSE_FORM_OPTS.includes(selectedLead.course_interested) ? { course: selectedLead.course_interested } : {}),
+                }}
+                onSave={handleRegFormSave}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Enroll Confirmation ── */}
       {showEnrollConfirm && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -706,7 +778,7 @@ export default function Leads() {
   )
 }
 
-function LeadCard({ lead, onClick }) {
+function LeadCard({ lead, onClick, formFilled }) {
   return (
     <div
       onClick={onClick}
@@ -714,11 +786,18 @@ function LeadCard({ lead, onClick }) {
     >
       <div className="flex items-start justify-between mb-2">
         <p className="font-semibold text-gray-900 text-sm leading-tight">{lead.name}</p>
-        {lead.lead_type && (
-          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full flex-shrink-0 ml-1.5 ${LEAD_TYPE_STYLE[lead.lead_type] || 'bg-gray-100 text-gray-600'}`}>
-            {lead.lead_type}
-          </span>
-        )}
+        <div className="flex items-center gap-1 flex-shrink-0 ml-1.5">
+          {formFilled && (
+            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600">
+              Form
+            </span>
+          )}
+          {lead.lead_type && (
+            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${LEAD_TYPE_STYLE[lead.lead_type] || 'bg-gray-100 text-gray-600'}`}>
+              {lead.lead_type}
+            </span>
+          )}
+        </div>
       </div>
       {(lead.do_not_contact || lead.no_followup) && (
         <div className="flex items-center gap-1 mb-2 flex-wrap">
