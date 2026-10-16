@@ -4,10 +4,10 @@ import { Plus, X, Phone, Mail, MapPin, BookOpen, Tag, Calendar, Trash2, Check, P
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import IntakeFormTab from '../components/IntakeFormTab'
+import { useCourses } from '../hooks/useCourses'
 
 // Form option lists mirrored from IntakeFormTab for prefill matching
 const SOURCE_FORM_OPTS = ['Walk-in', 'Referral', 'Social Media', 'Website', 'WhatsApp', 'Other']
-const COURSE_FORM_OPTS = ['Regular Yoga', 'Araiki Local', 'Araiki Foreigner', 'Amasana / Inner Mastery Circle', 'TTC', 'Free Workshop']
 
 const STAGES = ['new', 'contacted', 'interested', 'enrolled', 'lost']
 const STAGE_LABELS = { new: 'New', contacted: 'Contacted', interested: 'Interested', enrolled: 'Enrolled', lost: 'Lost' }
@@ -21,10 +21,6 @@ const STAGE_STYLE = {
 }
 
 const SOURCES = ['Walk-in', 'Social Media', 'Referral', 'Online', 'Workshop', 'Friend', 'Other']
-const COURSES = [
-  'Regular Yoga', 'Araiki Local', 'Araiki Foreigner',
-  'Amasana / Inner Mastery Circle', 'TTC', 'Free Workshop', "Gold's Gym",
-]
 const FOLLOW_UP_TYPES = ['Call', 'WhatsApp', 'Email', 'Visit', 'Other']
 const LEAD_TYPES = ['Local', 'Foreigner', 'Online', 'Referral', 'Walk-in']
 const NEXT_STEPS = ['Book Appointment', 'Send Information', 'Enrol Directly', 'Booked Free Trial', 'Level 2 Ready', 'Level 3 Ready', 'Follow Up Later']
@@ -64,6 +60,9 @@ export default function Leads() {
   const [saveError, setSaveError] = useState('')
   const [formFilledIds, setFormFilledIds] = useState(new Set())
   const [showRegForm, setShowRegForm] = useState(false)
+
+  const allCourses = useCourses({ includeValue: newLead.course_interested || undefined })
+  const filterCourses = useCourses()
 
   useEffect(() => { fetchEnquiries(); fetchFormFilledIds() }, [])
 
@@ -328,7 +327,7 @@ export default function Leads() {
             className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-[#1742b5] focus:border-transparent transition-shadow"
           >
             <option value="">All Courses</option>
-            {COURSES.map(c => <option key={c}>{c}</option>)}
+            {filterCourses.map(c => <option key={c.name}>{c.name}</option>)}
           </select>
         </div>
         <button
@@ -422,7 +421,7 @@ export default function Leads() {
                     onChange={e => setNewLead(p => ({ ...p, course_interested: e.target.value }))}
                     className={selectCls}>
                     <option value="">Select course</option>
-                    {COURSES.map(c => <option key={c}>{c}</option>)}
+                    {allCourses.map(c => <option key={c.name}>{c.name}</option>)}
                   </select>
                 </Field>
               </div>
@@ -775,7 +774,7 @@ export default function Leads() {
                   address: selectedLead.location || '',
                   registration_date: new Date().toISOString().split('T')[0],
                   ...(SOURCE_FORM_OPTS.includes(selectedLead.source) ? { source: selectedLead.source } : {}),
-                  ...(COURSE_FORM_OPTS.includes(selectedLead.course_interested) ? { course: selectedLead.course_interested } : {}),
+                  ...(selectedLead.course_interested ? { course: selectedLead.course_interested } : {}),
                 }}
                 onSave={handleRegFormSave}
               />

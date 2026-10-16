@@ -1,14 +1,11 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
+import { useCourses } from '../hooks/useCourses'
 
 // ── Option lists ──────────────────────────────────────────────────────────────
 const SEX_OPTS     = ['Male', 'Female', 'Other']
 const MARITAL_OPTS = ['Single', 'Married', 'Divorced', 'Widowed']
 const SOURCE_OPTS  = ['Walk-in', 'Referral', 'Social Media', 'Website', 'WhatsApp', 'Other']
-const COURSE_OPTS  = [
-  'Regular Yoga', 'Araiki Local', 'Araiki Foreigner',
-  'Amasana / Inner Mastery Circle', 'TTC', 'Free Workshop',
-]
 const FOOD_OPTS    = ['Vegetarian', 'Non-vegetarian']
 const APPETITE_OPTS = ['Normal', 'Poor']
 const SLEEP_OPTS   = ['Normal', 'Disturbed']
@@ -433,7 +430,7 @@ function EditMode({
         <SectionHeader n="2" title="Program" />
         <div className="grid grid-cols-3 gap-x-6 gap-y-5">
           <Field label="Course">
-            <Select value={form.course} onChange={set('course')} options={COURSE_OPTS} />
+            <Select value={form.course} onChange={set('course')} options={courseOptions.map(c => c.name)} />
           </Field>
           <Field label="Venue">
             <Input value={form.venue} onChange={set('venue')} placeholder="Class venue or meeting link" />
@@ -652,6 +649,8 @@ export default function IntakeFormTab({ studentProfileId, enquiryId, personId, p
   const [photoSignedUrl, setPhotoSignedUrl] = useState(null)
   const [photoRemoved, setPhotoRemoved]     = useState(false)
   const [photoError, setPhotoError]         = useState('')
+
+  const courseOptions = useCourses({ includeValue: form.course || undefined })
 
   useEffect(() => {
     setLoading(true)

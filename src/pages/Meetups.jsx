@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { Plus, X, MapPin, Star, Copy, Check, Trash2, Wifi, Users, Search, UserPlus } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { useCourses } from '../hooks/useCourses'
 
 function generateEventCode() {
   return 'NYG' + Math.random().toString(36).substring(2, 7).toUpperCase()
@@ -23,11 +24,6 @@ function formatShortDate(d) {
   if (!d) return '—'
   return new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
 }
-
-const LEAD_COURSES = [
-  'Regular Yoga', 'Araiki Local', 'Araiki Foreigner',
-  'Amasana / Inner Mastery Circle', 'TTC', 'Free Workshop',
-]
 
 const MEETUP_COURSES = ['Araiki', 'Regular Yoga', 'Free Workshop', 'Other']
 
@@ -85,6 +81,7 @@ export default function Meetups() {
   const [savingNewPerson, setSavingNewPerson] = useState(false)
 
   const regDropdownRef = useRef(null)
+  const leadCourses = useCourses()
 
   useEffect(() => { fetchMeetups() }, [])
 
@@ -874,7 +871,7 @@ export default function Meetups() {
                 className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-[#1742b5] text-gray-700"
               >
                 <option value="">All Courses</option>
-                {LEAD_COURSES.map(c => <option key={c}>{c}</option>)}
+                {leadCourses.map(c => <option key={c.name}>{c.name}</option>)}
               </select>
             </div>
 

@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { supabase } from '../lib/supabase'
-
-const COURSE_OPTS   = ['Regular Yoga', 'Araiki Local', 'Araiki Foreigner', 'Amasana / Inner Mastery Circle', 'TTC', 'Free Workshop']
+import { useCourses } from '../hooks/useCourses'
 const STATUS_OPTS   = ['Active', 'Completed', 'Dropped']
 const FEE_TYPE_OPTS = ['Monthly', 'One-time', 'Installment', 'Scholarship', 'Partial', 'Free']
 
@@ -22,6 +21,8 @@ export default function AddEnrollmentModal({ studentProfileId, studentName, onCl
   })
   const [saving, setSaving] = useState(false)
   const [error, setError]   = useState('')
+
+  const courseOptions = useCourses({ includeValue: form.course || undefined })
 
   const set = key => e => setForm(p => ({ ...p, [key]: e.target.value }))
 
@@ -75,7 +76,7 @@ export default function AddEnrollmentModal({ studentProfileId, studentName, onCl
           <Field label="Course">
             <select value={form.course} onChange={set('course')} className={INPUT}>
               <option value="">— Select —</option>
-              {COURSE_OPTS.map(o => <option key={o} value={o}>{o}</option>)}
+              {courseOptions.map(o => <option key={o.name} value={o.name}>{o.name}</option>)}
             </select>
           </Field>
 
