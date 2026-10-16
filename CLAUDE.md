@@ -194,6 +194,24 @@ If data is not loading after correct code is confirmed:
 - Most likely cause: policy creation errored during setup (e.g. is_admin() not found), leaving table with RLS on but no policies
 - Fix: run supabase/fix_*_rls.sql pattern — drop and recreate policies with the inline role check
 
+## Courses
+
+`courses` is the single source of truth for all course names used across enquiries, batches, and enrollments. Hard-coded CHECK constraints on `enquiries.course_interested` and `batches.course` were dropped; UI dropdowns must now query this table instead.
+
+### Columns
+- id uuid PK
+- name text UNIQUE NOT NULL
+- runs_batches boolean — true for courses that use the batch scheduling system (Regular Yoga, Yoga Therapy, Online Yoga)
+- is_active boolean — false hides the course from new-enrolment dropdowns
+- sort_order integer — controls display order in all UIs
+- created_at timestamptz
+
+Standard seed (sort_order 10–90): Regular Yoga, Yoga Therapy, Online Yoga, Araiki Local, Araiki Foreigner, Amasana / Inner Mastery Circle, TTC, Free Workshop, Gold's Gym.
+
+Any enquiries.course_interested value already in the DB at migration time is also inserted (runs_batches false, sort_order 0) so no lead loses its course.
+
+RLS ON. Admin-only ALL policy using the inline role check. Do NOT add new course values by hand; insert a row in this table instead.
+
 ## Yoga
 
 Four tables for batch scheduling and attendance (all admin-only RLS):
