@@ -194,6 +194,17 @@ If data is not loading after correct code is confirmed:
 - Most likely cause: policy creation errored during setup (e.g. is_admin() not found), leaving table with RLS on but no policies
 - Fix: run supabase/fix_*_rls.sql pattern — drop and recreate policies with the inline role check
 
+## Yoga
+
+Four tables for batch scheduling and attendance (all admin-only RLS):
+
+- **batches** — id, name, course (Regular Yoga / Yoga Therapy / Online Yoga), teacher_name, mode (Offline / Online), days smallint[] (0 = Sun … 6 = Sat), start_time, end_time, monthly_fee, location_or_link, status (active / paused / closed), notes, created_at
+- **batch_members** — id, batch_id → batches (CASCADE), person_id → people (RESTRICT), start_date, end_date, status (active / paused / left), monthly_fee_override (null = use batch fee), notes, created_at. Partial unique index on (batch_id, person_id) WHERE status IN ('active','paused') — allows rejoining after leaving.
+- **batch_sessions** — id, batch_id → batches (CASCADE), class_date, status (held / cancelled), note, created_at. Unique on (batch_id, class_date). Sessions may occur on any date (make-up classes are allowed).
+- **batch_attendance** — id, session_id → batch_sessions (CASCADE), person_id → people (CASCADE), present boolean, note, marked_by → profiles, created_at. Unique on (session_id, person_id).
+
+'Online Yoga' was added to the enquiries.course_interested CHECK constraint alongside this migration.
+
 ## Do NOT
 - Build mobile layouts — laptop only
 - Use any paid external services
