@@ -31,11 +31,15 @@ NYG CRM is a laptop-first web dashboard for Nirvana Yoga Global admins to manage
 ## Sidebar Navigation
 - Dashboard (home/overview)
 - Leads (enquiry pipeline)
+- Students (the people table — everyone enrolled with or without a PWA account)
 - Connect Students (practitioners with an NYG Connect account)
 - Fees (payment tracking)
 - Araiki (attunement tracker)
 - Meetups (bi-weekly attendance)
 - Settings
+
+## UI Terminology
+UI terminology: the people table is shown to users as "Students"; the PWA-linked tab is "Connect Students". Database and route names stay people.
 
 ## Authentication
 - Same Supabase auth as NYG Connect

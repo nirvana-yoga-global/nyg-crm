@@ -564,7 +564,7 @@ export default function Leads() {
                     to={`/people/${selectedLead.person_id}`}
                     className="flex items-center gap-1.5 mt-2 text-sm text-[#1742b5] hover:underline"
                   >
-                    Person: view profile →
+                    Student: view profile →
                   </Link>
                 )}
               </div>
@@ -798,7 +798,7 @@ export default function Leads() {
                   </div>
                   <h3 className="font-bold text-gray-900">Enrolled!</h3>
                   <p className="text-sm text-gray-500 mt-2">
-                    <strong>{selectedLead?.name}</strong> is now linked to a People profile.
+                    <strong>{selectedLead?.name}</strong> is now linked to a Students profile.
                   </p>
                 </div>
                 <div className="space-y-2">
@@ -807,7 +807,7 @@ export default function Leads() {
                     onClick={closeEnrollModal}
                     className="flex items-center justify-center w-full bg-[#1742b5] text-white py-2.5 rounded-lg text-sm font-semibold hover:bg-[#1338a0] transition-colors"
                   >
-                    View People profile →
+                    View student profile →
                   </Link>
                   <button
                     onClick={closeEnrollModal}
@@ -821,9 +821,9 @@ export default function Leads() {
               /* ── Picker ── */
               <>
                 <div className="mb-4">
-                  <h3 className="font-bold text-gray-900 mb-1">Multiple people match this phone</h3>
+                  <h3 className="font-bold text-gray-900 mb-1">Multiple students match this phone</h3>
                   <p className="text-sm text-gray-500">
-                    Which person is <strong>{selectedLead?.name}</strong>?
+                    Which student is <strong>{selectedLead?.name}</strong>?
                   </p>
                 </div>
                 <div className="space-y-2 mb-4">
@@ -857,7 +857,7 @@ export default function Leads() {
                   </div>
                   <h3 className="font-bold text-gray-900">Mark as Enrolled?</h3>
                   <p className="text-sm text-gray-500 mt-2 leading-relaxed">
-                    This adds <strong>{selectedLead?.name}</strong> to People (or links them if
+                    This adds <strong>{selectedLead?.name}</strong> to Students (or links them if
                     they are already there) and moves them to the Enrolled stage.
                   </p>
                 </div>

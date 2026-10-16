@@ -54,7 +54,7 @@ function AddPersonModal({ onClose, onSaved, existingPeople }) {
         onClick={e => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-          <h2 className="text-base font-semibold text-gray-900">Add Person</h2>
+          <h2 className="text-base font-semibold text-gray-900">Add Student</h2>
           <button
             onClick={onClose}
             className="w-7 h-7 flex items-center justify-center rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors text-lg leading-none"
@@ -185,13 +185,13 @@ export default function People() {
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">People ({people.length})</h1>
+        <h1 className="text-2xl font-bold text-gray-900">Students ({people.length})</h1>
         <button
           onClick={() => setShowAddModal(true)}
           className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-[#1742b5] text-white rounded-lg hover:bg-[#1330a0] transition-colors"
         >
           <Plus size={15} />
-          Add Person
+          Add Student
         </button>
       </div>
 
@@ -233,7 +233,7 @@ export default function People() {
       ) : (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
           {filtered.length === 0 ? (
-            <div className="py-16 text-center text-gray-400 text-sm">No people found.</div>
+            <div className="py-16 text-center text-gray-400 text-sm">No students found.</div>
           ) : (
             <table className="w-full">
               <thead>
