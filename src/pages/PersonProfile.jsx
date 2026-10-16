@@ -205,6 +205,136 @@ function DetailsTab({ person, setPerson }) {
   )
 }
 
+// ── Enrollments tab ───────────────────────────────────────────────────────────
+const LEAD_STATUS_BADGE = {
+  new:        'bg-gray-100 text-gray-600',
+  contacted:  'bg-blue-100 text-blue-700',
+  interested: 'bg-yellow-100 text-yellow-700',
+  enrolled:   'bg-green-100 text-green-700',
+  lost:       'bg-red-100 text-red-600',
+}
+const ENROL_STATUS_BADGE = {
+  active:    'bg-green-100 text-green-700',
+  completed: 'bg-blue-100 text-blue-700',
+  paused:    'bg-yellow-100 text-yellow-700',
+  cancelled: 'bg-red-100 text-red-600',
+}
+
+function EnrollmentsTab({ person }) {
+  const [leads, setLeads] = useState([])
+  const [enrolments, setEnrolments] = useState([])
+  const [leadsError, setLeadsError] = useState('')
+  const [enrolmentsError, setEnrolmentsError] = useState('')
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    async function load() {
+      const [leadsRes, enrolRes] = await Promise.all([
+        supabase
+          .from('enquiries')
+          .select('id, name, course_interested, status, created_at')
+          .eq('person_id', person.id)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('enrollments')
+          .select('id, course, status, start_date, total_fee_agreed')
+          .eq('person_id', person.id)
+          .order('start_date', { ascending: false }),
+      ])
+      if (leadsRes.error) setLeadsError(leadsRes.error.message)
+      else setLeads(leadsRes.data || [])
+      if (enrolRes.error) setEnrolmentsError(enrolRes.error.message)
+      else setEnrolments(enrolRes.data || [])
+      setLoading(false)
+    }
+    load()
+  }, [person.id])
+
+  if (loading) return <div className="py-12 text-center text-gray-400 text-sm">Loading…</div>
+
+  return (
+    <div className="space-y-6">
+
+      {/* ── Courses from leads ── */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <h3 className="text-sm font-semibold text-gray-800 mb-4">Courses from leads</h3>
+        {leadsError ? (
+          <p className="text-sm text-red-600">{leadsError}</p>
+        ) : leads.length === 0 ? (
+          <p className="text-sm text-gray-400">No leads linked yet.</p>
+        ) : (
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-gray-100">
+                <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide pb-2 pr-4">Course</th>
+                <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide pb-2 pr-4">Status</th>
+                <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide pb-2">Lead date</th>
+              </tr>
+            </thead>
+            <tbody>
+              {leads.map(lead => (
+                <tr key={lead.id} className="border-b border-gray-50 last:border-0">
+                  <td className="py-3 pr-4 text-sm text-gray-800">{lead.course_interested || '—'}</td>
+                  <td className="py-3 pr-4">
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${LEAD_STATUS_BADGE[lead.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                      {lead.status}
+                    </span>
+                  </td>
+                  <td className="py-3 text-sm text-gray-500">
+                    {new Date(lead.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* ── Enrolments ── */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <h3 className="text-sm font-semibold text-gray-800 mb-4">Enrolments</h3>
+        {enrolmentsError ? (
+          <p className="text-sm text-red-600">{enrolmentsError}</p>
+        ) : enrolments.length === 0 ? (
+          <p className="text-sm text-gray-400">No enrolments yet. Fees and batches come with the Yoga and Fees features.</p>
+        ) : (
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-gray-100">
+                <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide pb-2 pr-4">Course</th>
+                <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide pb-2 pr-4">Status</th>
+                <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide pb-2 pr-4">Start date</th>
+                <th className="text-right text-xs font-semibold text-gray-400 uppercase tracking-wide pb-2">Total fee</th>
+              </tr>
+            </thead>
+            <tbody>
+              {enrolments.map(enr => (
+                <tr key={enr.id} className="border-b border-gray-50 last:border-0">
+                  <td className="py-3 pr-4 text-sm text-gray-800">{enr.course || '—'}</td>
+                  <td className="py-3 pr-4">
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${ENROL_STATUS_BADGE[enr.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                      {enr.status || '—'}
+                    </span>
+                  </td>
+                  <td className="py-3 pr-4 text-sm text-gray-500">
+                    {enr.start_date
+                      ? new Date(enr.start_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+                      : '—'}
+                  </td>
+                  <td className="py-3 text-sm text-gray-800 text-right">
+                    {enr.total_fee_agreed != null ? `₹${Number(enr.total_fee_agreed).toLocaleString('en-IN')}` : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+    </div>
+  )
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function PersonProfile() {
   const { id } = useParams()
@@ -289,9 +419,7 @@ export default function PersonProfile() {
           <NotesTab personId={person.id} />
         )}
         {activeTab === 'Enrollments' && (
-          <div className="bg-white rounded-xl border border-gray-200 p-12 text-center text-gray-400 text-sm">
-            Enrollments will appear here.
-          </div>
+          <EnrollmentsTab person={person} />
         )}
       </div>
     </div>
