@@ -223,6 +223,26 @@ Four tables for batch scheduling and attendance (all admin-only RLS):
 
 'Online Yoga' was added to the enquiries.course_interested CHECK constraint alongside this migration.
 
+## Batch dues
+
+Monthly installment cycle for yoga batch members. Migration: `supabase/add_batch_dues.sql`.
+
+### Schema additions
+- `enrollments.batch_member_id uuid UNIQUE REFERENCES batch_members(id) ON DELETE RESTRICT` — one enrollment per member
+- `installments.kind text` — `'monthly'` = auto-managed batch due; `NULL` = legacy manual fee
+- Partial unique index `installments_monthly_unique` on `(enrollment_id, due_date) WHERE kind = 'monthly'`
+
+### Functions (SECURITY DEFINER, admin-only guard)
+- `create_batch_enrollment(p_batch_member_id)` — idempotent; creates enrollment + seeds first monthly due from `batch_members.start_date`
+- `record_batch_payment(p_installment_id, p_amount, p_paid_date, p_method, p_note)` — marks due paid; auto-creates next due if member is still active; cycle anchor = `enrollment.start_date`; next due = `start_date + N months` where N = count of dues with `due_date >= start_date`
+- `set_batch_member_status(p_member_id, p_status, p_date)` — updates member; on pause/left deletes future pending dues (`due_date > p_date`); on resume from pause resets `enrollment.start_date = p_date` and seeds a new due
+
+### Rules
+- Status values: `'pending'`, `'paid'`, `'active'`, `'paused'`, `'left'` — all lowercase
+- **Overdue is NOT stored.** App computes it as `status = 'pending' AND due_date < today` (India local date, never `.toISOString()`)
+- `fee_type` written as `'Monthly'` (Title case) to match the existing FeesTab/AddEnrollmentModal convention
+- Old FeesTab / AddInstallmentModal write Title-case status values (`'Pending'`, `'Paid'`); batch dues use lowercase — no CHECK constraint so both coexist
+
 ## Do NOT
 - Build mobile layouts — laptop only
 - Use any paid external services
