@@ -1,5 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
+
+function fmtDate(s) {
+  if (!s) return '—'
+  const [y, m, d] = s.split('-')
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+  return `${parseInt(d, 10)} ${MONTHS[parseInt(m, 10) - 1]} ${y}`
+}
 import { ChevronLeft } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import IntakeFormTab from '../components/IntakeFormTab'
@@ -220,16 +227,24 @@ const ENROL_STATUS_BADGE = {
   cancelled: 'bg-red-100 text-red-600',
 }
 
+const BATCH_MEMBER_STATUS_BADGE = {
+  active: 'bg-green-100 text-green-700',
+  paused: 'bg-yellow-100 text-yellow-700',
+  left:   'bg-gray-100 text-gray-500',
+}
+
 function EnrollmentsTab({ person }) {
   const [leads, setLeads] = useState([])
   const [enrolments, setEnrolments] = useState([])
+  const [batchMemberships, setBatchMemberships] = useState([])
   const [leadsError, setLeadsError] = useState('')
   const [enrolmentsError, setEnrolmentsError] = useState('')
+  const [batchError, setBatchError] = useState('')
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     async function load() {
-      const [leadsRes, enrolRes] = await Promise.all([
+      const [leadsRes, enrolRes, batchRes] = await Promise.all([
         supabase
           .from('enquiries')
           .select('id, name, course_interested, status, created_at')
@@ -240,11 +255,18 @@ function EnrollmentsTab({ person }) {
           .select('id, course, status, start_date, total_fee_agreed')
           .eq('person_id', person.id)
           .order('start_date', { ascending: false }),
+        supabase
+          .from('batch_members')
+          .select('id, status, start_date, end_date, monthly_fee_override, batches(id, name, course, monthly_fee)')
+          .eq('person_id', person.id)
+          .order('start_date', { ascending: false }),
       ])
       if (leadsRes.error) setLeadsError(leadsRes.error.message)
       else setLeads(leadsRes.data || [])
       if (enrolRes.error) setEnrolmentsError(enrolRes.error.message)
       else setEnrolments(enrolRes.data || [])
+      if (batchRes.error) setBatchError(batchRes.error.message)
+      else setBatchMemberships(batchRes.data || [])
       setLoading(false)
     }
     load()
@@ -296,7 +318,7 @@ function EnrollmentsTab({ person }) {
         {enrolmentsError ? (
           <p className="text-sm text-red-600">{enrolmentsError}</p>
         ) : enrolments.length === 0 ? (
-          <p className="text-sm text-gray-400">No enrolments yet. Fees and batches come with the Yoga and Fees features.</p>
+          <p className="text-sm text-gray-400">No enrolments yet.</p>
         ) : (
           <table className="w-full">
             <thead>
@@ -317,15 +339,61 @@ function EnrollmentsTab({ person }) {
                     </span>
                   </td>
                   <td className="py-3 pr-4 text-sm text-gray-500">
-                    {enr.start_date
-                      ? new Date(enr.start_date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
-                      : '—'}
+                    {enr.start_date ? fmtDate(enr.start_date) : '—'}
                   </td>
                   <td className="py-3 text-sm text-gray-800 text-right">
                     {enr.total_fee_agreed != null ? `₹${Number(enr.total_fee_agreed).toLocaleString('en-IN')}` : '—'}
                   </td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {/* ── Batches ── */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <h3 className="text-sm font-semibold text-gray-800 mb-4">Batches</h3>
+        {batchError ? (
+          <p className="text-sm text-red-600">{batchError}</p>
+        ) : batchMemberships.length === 0 ? (
+          <p className="text-sm text-gray-400">Not in any batch.</p>
+        ) : (
+          <table className="w-full">
+            <thead>
+              <tr className="border-b border-gray-100">
+                <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide pb-2 pr-4">Batch</th>
+                <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide pb-2 pr-4">Status</th>
+                <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide pb-2 pr-4">Start</th>
+                <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide pb-2 pr-4">End</th>
+                <th className="text-right text-xs font-semibold text-gray-400 uppercase tracking-wide pb-2">Fee/mo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {batchMemberships.map(m => {
+                const fee = m.monthly_fee_override != null ? m.monthly_fee_override : m.batches?.monthly_fee
+                return (
+                  <tr key={m.id} className="border-b border-gray-50 last:border-0">
+                    <td className="py-3 pr-4">
+                      <Link to={`/yoga/${m.batches?.id}`} className="text-sm font-medium text-gray-800 hover:text-[#1742b5]">
+                        {m.batches?.name || '—'}
+                      </Link>
+                      {m.batches?.course && <div className="text-xs text-gray-400">{m.batches.course}</div>}
+                    </td>
+                    <td className="py-3 pr-4">
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${BATCH_MEMBER_STATUS_BADGE[m.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                        {m.status}
+                      </span>
+                    </td>
+                    <td className="py-3 pr-4 text-sm text-gray-500">{m.start_date ? fmtDate(m.start_date) : '—'}</td>
+                    <td className="py-3 pr-4 text-sm text-gray-500">{m.end_date ? fmtDate(m.end_date) : '—'}</td>
+                    <td className="py-3 text-sm text-gray-800 text-right">
+                      {fee != null ? `₹${Number(fee).toLocaleString('en-IN')}` : '—'}
+                      {m.monthly_fee_override != null && <span className="ml-1 text-xs text-amber-600">custom</span>}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         )}

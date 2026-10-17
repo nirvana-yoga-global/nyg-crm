@@ -1,7 +1,7 @@
 import { NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, Users, UserCheck, CreditCard,
-  Flower2, CalendarDays, Calendar, Settings, LogOut, Contact,
+  Flower2, CalendarDays, Calendar, Settings, LogOut, Contact, Layers,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 
@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
   { to: '/leads', icon: Users, label: 'Leads' },
   { to: '/people', icon: Contact, label: 'Students' },
+  { to: '/yoga', icon: Layers, label: 'Yoga' },
   { to: '/students', icon: UserCheck, label: 'Connect Students' },
   { to: '/fees', icon: CreditCard, label: 'Fees' },
   { to: '/araiki', icon: Flower2, label: 'Araiki' },

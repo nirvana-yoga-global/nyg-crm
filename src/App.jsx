@@ -13,6 +13,8 @@ import Fees from './pages/Fees'
 import Araiki from './pages/Araiki'
 import Meetups from './pages/Meetups'
 import Settings from './pages/Settings'
+import Yoga from './pages/Yoga'
+import BatchPage from './pages/BatchPage'
 
 function AppContent() {
   const { user, isAdmin, loading } = useAuth()
@@ -44,6 +46,8 @@ function AppContent() {
         <Route path="/students/:id" element={<StudentProfile />} />
         <Route path="/fees" element={<Fees />} />
         <Route path="/araiki" element={<Araiki />} />
+        <Route path="/yoga" element={<Yoga />} />
+        <Route path="/yoga/:id" element={<BatchPage />} />
         <Route path="/meetups" element={<Meetups />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/access-denied" element={<AccessDenied />} />
