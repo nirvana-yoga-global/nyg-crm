@@ -797,7 +797,7 @@ export default function Leads() {
                   </div>
                   <h3 className="font-bold text-gray-900">Enrolled!</h3>
                   <p className="text-sm text-gray-500 mt-2">
-                    <strong>{selectedLead?.name}</strong> is now linked to a Students profile.
+                    <strong>{selectedLead?.name}</strong> is now linked to a Student profile.
                   </p>
                 </div>
                 <div className="space-y-2">

@@ -1,15 +1,22 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
-import { ChevronLeft, X, Search } from 'lucide-react'
+import { ChevronLeft, X, Search, ChevronDown, ChevronUp } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import { useCourses } from '../hooks/useCourses'
+import RecordPaymentModal from '../components/RecordPaymentModal'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function localToday() {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function addDays(dateStr, days) {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const dt = new Date(y, m - 1, d + days)
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
 }
 
 function fmtDate(s) {
@@ -49,7 +56,10 @@ const MEMBER_STATUS_BADGE = {
 
 // ─── Students Tab ─────────────────────────────────────────────────────────────
 
-function StudentsTab({ batch, members, setMembers }) {
+function StudentsTab({ batch, members, setMembers, memberDues, refreshDues }) {
+  const today = localToday()
+  const in7 = addDays(today, 7)
+
   const [addSearch, setAddSearch] = useState('')
   const [addResults, setAddResults] = useState([])
   const [addSearching, setAddSearching] = useState(false)
@@ -62,6 +72,8 @@ function StudentsTab({ batch, members, setMembers }) {
   const [editForm, setEditForm] = useState({})
   const [editSaving, setEditSaving] = useState(false)
   const [editErr, setEditErr] = useState('')
+  const [payDue, setPayDue] = useState(null)
+  const [expanded, setExpanded] = useState(new Set())
   const searchRef = useRef(null)
   const debounceRef = useRef(null)
 
@@ -112,7 +124,13 @@ function StudentsTab({ batch, members, setMembers }) {
       else setAddErr(error.message)
       setAddSaving(false); return
     }
-    setMembers(prev => [...prev, data])
+    const newMembers = [...members, data]
+    setMembers(newMembers)
+    const { error: rpcErr } = await supabase.rpc('create_batch_enrollment', { p_batch_member_id: data.id })
+    if (rpcErr) {
+      setAddErr(`Student added but has no due yet: ${rpcErr.message}`)
+    }
+    await refreshDues(newMembers)
     setSelectedPerson(null)
     setAddSearch('')
     setAddForm({ start_date: localToday(), monthly_fee_override: '' })
@@ -133,21 +151,66 @@ function StudentsTab({ batch, members, setMembers }) {
 
   async function handleEditSave() {
     if (!editForm.start_date) { setEditErr('Start date is required.'); return }
-    if (editForm.status === 'left' && !editForm.end_date) {
-      setEditForm(f => ({ ...f, end_date: localToday() }))
-    }
     setEditSaving(true); setEditErr('')
-    const { data, error } = await supabase.from('batch_members').update({
-      status: editForm.status,
-      start_date: editForm.start_date,
-      end_date: editForm.status === 'left' ? (editForm.end_date || localToday()) : null,
-      monthly_fee_override: editForm.monthly_fee_override === '' ? null : Number(editForm.monthly_fee_override),
+    const today = localToday()
+    const statusChanged = editForm.status !== editMember.status
+    const newOverride = editForm.monthly_fee_override === '' ? null : Number(editForm.monthly_fee_override)
+    const overrideChanged = newOverride !== editMember.monthly_fee_override
+    const hasDues = (memberDues[editMember.id]?.history?.length || 0) > 0
+
+    // 1. Status change → RPC (handles batch_members.status, end_date, installment pruning/seeding)
+    if (statusChanged) {
+      const pDate = editForm.status === 'left' ? (editForm.end_date || today) : today
+      const { error: rpcErr } = await supabase.rpc('set_batch_member_status', {
+        p_member_id: editMember.id,
+        p_status: editForm.status,
+        p_date: pDate,
+      })
+      if (rpcErr) { setEditErr(rpcErr.message); setEditSaving(false); return }
+    }
+
+    // 2. Direct update for other editable fields
+    const payload = {
+      monthly_fee_override: newOverride,
       notes: n(editForm.notes.trim()),
-    }).eq('id', editMember.id).select('*, people(id, full_name, phone)').single()
-    if (error) { setEditErr(error.message); setEditSaving(false); return }
-    setMembers(prev => prev.map(m => m.id === editMember.id ? data : m))
+    }
+    if (!hasDues) payload.start_date = editForm.start_date
+    if (!statusChanged) {
+      payload.status = editForm.status
+      payload.end_date = editForm.status === 'left' ? (editForm.end_date || today) : null
+    }
+    const { error: updErr } = await supabase.from('batch_members').update(payload).eq('id', editMember.id)
+    if (updErr) { setEditErr(updErr.message); setEditSaving(false); return }
+
+    // 3. If fee override changed, update pending monthly installment amounts
+    if (overrideChanged && memberDues[editMember.id]?.enrollmentId) {
+      const newFee = newOverride != null ? newOverride : batch.monthly_fee
+      if (newFee != null) {
+        await supabase.from('installments')
+          .update({ amount: newFee })
+          .eq('enrollment_id', memberDues[editMember.id].enrollmentId)
+          .eq('kind', 'monthly')
+          .eq('status', 'pending')
+      }
+    }
+
+    // 4. Refresh member row with latest DB state
+    const { data: fresh } = await supabase.from('batch_members')
+      .select('*, people(id, full_name, phone)')
+      .eq('id', editMember.id).single()
+    const updatedMembers = members.map(m => m.id === editMember.id ? (fresh || m) : m)
+    setMembers(updatedMembers)
+    await refreshDues(updatedMembers)
     setEditMember(null)
     setEditSaving(false)
+  }
+
+  function toggleExpanded(id) {
+    setExpanded(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
   }
 
   const feeDisplay = (m) => {
@@ -168,15 +231,22 @@ function StudentsTab({ batch, members, setMembers }) {
                 <th className="text-left px-4 py-3">Name</th>
                 <th className="text-right px-4 py-3">Fee/mo</th>
                 <th className="text-left px-4 py-3">Start</th>
-                <th className="text-left px-4 py-3">End</th>
                 <th className="text-left px-4 py-3">Status</th>
-                <th className="px-4 py-3 w-12" />
+                <th className="text-left px-4 py-3">Next due</th>
+                <th className="px-4 py-3 w-36" />
               </tr>
             </thead>
             <tbody>
-              {members.map(m => {
+              {members.flatMap(m => {
                 const { text: feeText, custom } = feeDisplay(m)
-                return (
+                const dues = memberDues[m.id]
+                const pending = dues?.pending
+                const isExpanded = expanded.has(m.id)
+                const history = dues?.history || []
+                const overdue = pending && pending.due_date < today
+                const soon = pending && !overdue && pending.due_date <= in7
+
+                const rows = [
                   <tr key={m.id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/50">
                     <td className="px-4 py-3 font-medium">
                       <Link to={`/people/${m.person_id}`} className="text-gray-900 hover:text-[#1742b5]">
@@ -189,17 +259,96 @@ function StudentsTab({ batch, members, setMembers }) {
                       {custom && <span className="ml-1 text-xs text-amber-600 font-medium">custom</span>}
                     </td>
                     <td className="px-4 py-3 text-gray-600 text-xs">{fmtDate(m.start_date)}</td>
-                    <td className="px-4 py-3 text-gray-600 text-xs">{m.end_date ? fmtDate(m.end_date) : '—'}</td>
                     <td className="px-4 py-3">
                       <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${MEMBER_STATUS_BADGE[m.status] || 'bg-gray-100 text-gray-600'}`}>
                         {m.status}
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <button onClick={() => openEdit(m)} className="text-xs text-gray-400 hover:text-gray-700 underline">Edit</button>
+                      {pending ? (
+                        <div className="space-y-1">
+                          <span className="text-xs text-gray-700">
+                            {fmtDate(pending.due_date)} · ₹{Number(pending.amount).toLocaleString('en-IN')}
+                          </span>
+                          <div className="flex gap-1">
+                            {overdue && (
+                              <span className="text-xs font-medium bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">Overdue</span>
+                            )}
+                            {soon && (
+                              <span className="text-xs font-medium bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">Due soon</span>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-gray-400">—</span>
+                      )}
                     </td>
-                  </tr>
-                )
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2 justify-end">
+                        {pending && (
+                          <button onClick={() => setPayDue(pending)}
+                            className="text-xs font-medium text-[#1742b5] border border-[#1742b5]/30 px-2 py-1 rounded-lg hover:bg-[#1742b5]/5 transition-colors whitespace-nowrap">
+                            Record payment
+                          </button>
+                        )}
+                        {history.length > 0 && (
+                          <button onClick={() => toggleExpanded(m.id)}
+                            className="text-gray-400 hover:text-gray-600 flex items-center">
+                            {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                          </button>
+                        )}
+                        <button onClick={() => openEdit(m)} className="text-xs text-gray-400 hover:text-gray-700 underline">Edit</button>
+                      </div>
+                    </td>
+                  </tr>,
+                ]
+
+                if (isExpanded && history.length > 0) {
+                  rows.push(
+                    <tr key={`${m.id}-hist`} className="bg-gray-50/60">
+                      <td colSpan={6} className="px-4 pb-3 pt-0">
+                        <div className="rounded-lg border border-gray-100 overflow-hidden mt-1">
+                          <table className="w-full text-xs">
+                            <thead>
+                              <tr className="bg-gray-50 border-b border-gray-100 text-gray-400 font-semibold uppercase tracking-wide">
+                                <th className="text-left px-3 py-2">Due date</th>
+                                <th className="text-right px-3 py-2">Amount</th>
+                                <th className="text-left px-3 py-2">Status</th>
+                                <th className="text-left px-3 py-2">Paid date</th>
+                                <th className="text-left px-3 py-2">Method</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {history.map(inst => {
+                                const isPaid = inst.status === 'paid'
+                                const isOvd = inst.status === 'pending' && inst.due_date < today
+                                const statusLabel = isOvd ? 'overdue' : inst.status
+                                const statusCls = isPaid
+                                  ? 'bg-green-100 text-green-700'
+                                  : isOvd
+                                  ? 'bg-red-100 text-red-700'
+                                  : 'bg-yellow-100 text-yellow-700'
+                                return (
+                                  <tr key={inst.id} className="border-b border-gray-100 last:border-0">
+                                    <td className="px-3 py-2 text-gray-700">{fmtDate(inst.due_date)}</td>
+                                    <td className="px-3 py-2 text-right text-gray-700">₹{Number(inst.amount).toLocaleString('en-IN')}</td>
+                                    <td className="px-3 py-2">
+                                      <span className={`font-medium px-1.5 py-0.5 rounded-full capitalize ${statusCls}`}>{statusLabel}</span>
+                                    </td>
+                                    <td className="px-3 py-2 text-gray-500">{inst.paid_date ? fmtDate(inst.paid_date) : '—'}</td>
+                                    <td className="px-3 py-2 text-gray-500">{inst.payment_method || '—'}</td>
+                                  </tr>
+                                )
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                }
+
+                return rows
               })}
             </tbody>
           </table>
@@ -223,8 +372,7 @@ function StudentsTab({ batch, members, setMembers }) {
             <div className="absolute top-full left-0 right-0 mt-1 bg-white rounded-lg border border-gray-200 shadow-lg z-10 overflow-hidden">
               {addResults.map(p => (
                 <button key={p.id} onClick={() => selectPerson(p)}
-                  className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center justify-between"
-                >
+                  className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 flex items-center justify-between">
                   <span className="font-medium text-gray-800">{p.full_name}</span>
                   {p.phone && <span className="text-xs text-gray-400">{p.phone}</span>}
                 </button>
@@ -279,7 +427,12 @@ function StudentsTab({ batch, members, setMembers }) {
             <div className="p-6 space-y-4">
               <div>
                 <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Status</label>
-                <select value={editForm.status} onChange={e => setEditForm(f => ({ ...f, status: e.target.value, end_date: e.target.value === 'left' ? (f.end_date || localToday()) : f.end_date }))}
+                <select value={editForm.status}
+                  onChange={e => setEditForm(f => ({
+                    ...f,
+                    status: e.target.value,
+                    end_date: e.target.value === 'left' ? (f.end_date || localToday()) : f.end_date,
+                  }))}
                   className={inputCls}>
                   <option value="active">Active</option>
                   <option value="paused">Paused</option>
@@ -288,35 +441,70 @@ function StudentsTab({ batch, members, setMembers }) {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Start Date</label>
-                  <input type="date" value={editForm.start_date} onChange={e => setEditForm(f => ({ ...f, start_date: e.target.value }))} className={inputCls} />
+                  <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+                    Start Date
+                  </label>
+                  {(memberDues[editMember.id]?.history?.length || 0) > 0 ? (
+                    <div className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm text-gray-600">
+                      {fmtDate(editMember.start_date)}
+                      <span className="ml-2 text-xs text-gray-400">(locked — has dues)</span>
+                    </div>
+                  ) : (
+                    <input type="date" value={editForm.start_date}
+                      onChange={e => setEditForm(f => ({ ...f, start_date: e.target.value }))}
+                      className={inputCls} />
+                  )}
                 </div>
                 {editForm.status === 'left' && (
                   <div>
                     <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">End Date</label>
-                    <input type="date" value={editForm.end_date || localToday()} onChange={e => setEditForm(f => ({ ...f, end_date: e.target.value }))} className={inputCls} />
+                    <input type="date" value={editForm.end_date || localToday()}
+                      onChange={e => setEditForm(f => ({ ...f, end_date: e.target.value }))}
+                      className={inputCls} />
                   </div>
                 )}
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Custom Monthly Fee (₹) — leave blank for batch default</label>
-                <input type="number" value={editForm.monthly_fee_override} onChange={e => setEditForm(f => ({ ...f, monthly_fee_override: e.target.value }))}
-                  placeholder={`Batch default: ₹${batch.monthly_fee != null ? batch.monthly_fee : 0}`} min="0" className={inputCls} />
+                <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+                  Custom Monthly Fee (₹) — leave blank for batch default
+                </label>
+                <input type="number" value={editForm.monthly_fee_override}
+                  onChange={e => setEditForm(f => ({ ...f, monthly_fee_override: e.target.value }))}
+                  placeholder={`Batch default: ₹${batch.monthly_fee != null ? batch.monthly_fee : 0}`}
+                  min="0" className={inputCls} />
               </div>
               <div>
                 <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Notes</label>
-                <textarea value={editForm.notes} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))} rows={2} className={`${inputCls} resize-none`} />
+                <textarea value={editForm.notes}
+                  onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))}
+                  rows={2} className={`${inputCls} resize-none`} />
               </div>
             </div>
             <div className="px-6 py-4 border-t border-gray-100 flex items-center justify-end gap-3">
               {editErr && <span className="text-sm text-red-600 mr-auto">{editErr}</span>}
-              <button onClick={() => setEditMember(null)} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:border-gray-300">Cancel</button>
-              <button onClick={handleEditSave} disabled={editSaving} className="px-5 py-2 text-sm font-semibold bg-[#1742b5] text-white rounded-lg hover:bg-[#1338a0] disabled:opacity-60 transition-colors">
+              <button onClick={() => setEditMember(null)}
+                className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:border-gray-300">
+                Cancel
+              </button>
+              <button onClick={handleEditSave} disabled={editSaving}
+                className="px-5 py-2 text-sm font-semibold bg-[#1742b5] text-white rounded-lg hover:bg-[#1338a0] disabled:opacity-60 transition-colors">
                 {editSaving ? 'Saving…' : 'Save'}
               </button>
             </div>
           </div>
         </div>
+      )}
+
+      {/* Record payment modal */}
+      {payDue && (
+        <RecordPaymentModal
+          due={payDue}
+          onClose={() => setPayDue(null)}
+          onSuccess={async () => {
+            setPayDue(null)
+            await refreshDues(members)
+          }}
+        />
       )}
     </div>
   )
@@ -495,7 +683,6 @@ function AttendanceTab({ batch, members, userId }) {
           {saved && <span className="text-sm text-green-600">Saved</span>}
         </div>
 
-        {/* Cancel class */}
         <div className="mt-5 pt-4 border-t border-gray-100">
           <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">Class cancelled or postponed?</p>
           <div className="flex gap-3">
@@ -511,7 +698,6 @@ function AttendanceTab({ batch, members, userId }) {
         </div>
       </div>
 
-      {/* Recent sessions */}
       {recentSessions.length > 0 && (
         <div className="bg-white rounded-xl border border-gray-200 p-5">
           <h3 className="text-sm font-semibold text-gray-800 mb-3">Recent Sessions</h3>
@@ -674,7 +860,8 @@ function DetailsTab({ batch, setBatch }) {
       <div className="flex items-center justify-end gap-3 pt-2">
         {saveErr && <span className="text-sm text-red-600 mr-auto">{saveErr}</span>}
         <button onClick={() => setEditing(false)} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:border-gray-300">Cancel</button>
-        <button onClick={handleSave} disabled={saving} className="px-5 py-2 text-sm font-semibold bg-[#1742b5] text-white rounded-lg hover:bg-[#1338a0] disabled:opacity-60 transition-colors">
+        <button onClick={handleSave} disabled={saving}
+          className="px-5 py-2 text-sm font-semibold bg-[#1742b5] text-white rounded-lg hover:bg-[#1338a0] disabled:opacity-60 transition-colors">
           {saving ? 'Saving…' : 'Save Changes'}
         </button>
       </div>
@@ -694,6 +881,40 @@ export default function BatchPage() {
   const [members, setMembers] = useState([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('Students')
+  const [memberDues, setMemberDues] = useState({})
+
+  async function loadDues(membersList) {
+    if (!membersList?.length) { setMemberDues({}); return }
+    const memberIds = membersList.map(m => m.id)
+    const { data: enrols } = await supabase
+      .from('enrollments').select('id, batch_member_id').in('batch_member_id', memberIds)
+    const enrolMap = {}
+    ;(enrols || []).forEach(e => { enrolMap[e.batch_member_id] = e.id })
+    const enrolIds = (enrols || []).map(e => e.id)
+    if (!enrolIds.length) {
+      const result = {}
+      membersList.forEach(m => { result[m.id] = { enrollmentId: null, pending: null, history: [] } })
+      setMemberDues(result); return
+    }
+    const { data: installs } = await supabase
+      .from('installments')
+      .select('id, enrollment_id, status, due_date, amount, paid_date, payment_method')
+      .in('enrollment_id', enrolIds)
+      .eq('kind', 'monthly')
+      .order('due_date', { ascending: false })
+    const installMap = {}
+    ;(installs || []).forEach(i => {
+      if (!installMap[i.enrollment_id]) installMap[i.enrollment_id] = []
+      installMap[i.enrollment_id].push(i)
+    })
+    const result = {}
+    membersList.forEach(m => {
+      const enrolId = enrolMap[m.id]
+      const all = enrolId ? (installMap[enrolId] || []) : []
+      result[m.id] = { enrollmentId: enrolId || null, pending: all.find(i => i.status === 'pending') || null, history: all }
+    })
+    setMemberDues(result)
+  }
 
   useEffect(() => {
     async function load() {
@@ -705,8 +926,10 @@ export default function BatchPage() {
           .order('created_at', { ascending: true }),
       ])
       setBatch(bRes.data)
-      setMembers(mRes.data || [])
+      const mData = mRes.data || []
+      setMembers(mData)
       setLoading(false)
+      await loadDues(mData)
     }
     load()
   }, [id])
@@ -745,7 +968,15 @@ export default function BatchPage() {
         ))}
       </div>
       <div className="border border-gray-200 border-t-0 rounded-b-xl bg-[#f8fafc] p-6 min-h-[300px]">
-        {activeTab === 'Students' && <StudentsTab batch={batch} members={members} setMembers={setMembers} />}
+        {activeTab === 'Students' && (
+          <StudentsTab
+            batch={batch}
+            members={members}
+            setMembers={setMembers}
+            memberDues={memberDues}
+            refreshDues={loadDues}
+          />
+        )}
         {activeTab === 'Attendance' && <AttendanceTab batch={batch} members={members} userId={user?.id} />}
         {activeTab === 'Details' && <DetailsTab batch={batch} setBatch={setBatch} />}
       </div>

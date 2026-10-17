@@ -3,8 +3,27 @@ import { Link } from 'react-router-dom'
 import { Plus, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useCourses } from '../hooks/useCourses'
+import RecordPaymentModal from '../components/RecordPaymentModal'
 
 const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+function localToday() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function addDays(dateStr, days) {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const dt = new Date(y, m - 1, d + days)
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+}
+
+function fmtDate(s) {
+  if (!s) return '—'
+  const [y, m, d] = s.split('-')
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+  return `${parseInt(d, 10)} ${MONTHS[parseInt(m, 10) - 1]} ${y}`
+}
 
 function timeForInput(t) { return t ? t.slice(0, 5) : '' }
 
@@ -51,10 +70,19 @@ export default function Yoga() {
   const [saveError, setSaveError] = useState('')
   const [memberCounts, setMemberCounts] = useState({})
 
+  // Dues panel
+  const [dues, setDues] = useState({ overdue: [], soon: [] })
+  const [duesLoading, setDuesLoading] = useState(true)
+  const [duesTab, setDuesTab] = useState('overdue')
+  const [payDue, setPayDue] = useState(null)
+
   const allCourses = useCourses({ batchesOnly: true, includeValue: form.course || undefined })
   const filterCourses = useCourses({ batchesOnly: true })
 
-  useEffect(() => { fetchBatches() }, [])
+  useEffect(() => {
+    fetchBatches()
+    loadDues()
+  }, [])
 
   async function fetchBatches() {
     const { data } = await supabase.from('batches').select('*').order('created_at', { ascending: true })
@@ -66,6 +94,58 @@ export default function Yoga() {
       ;(ms || []).forEach(m => { counts[m.batch_id] = (counts[m.batch_id] || 0) + 1 })
       setMemberCounts(counts)
     }
+  }
+
+  async function loadDues() {
+    setDuesLoading(true)
+    const today = localToday()
+    const in7 = addDays(today, 7)
+
+    const { data: installs } = await supabase
+      .from('installments')
+      .select('id, due_date, amount, enrollment_id')
+      .eq('kind', 'monthly')
+      .eq('status', 'pending')
+      .lte('due_date', in7)
+      .order('due_date', { ascending: true })
+
+    if (!installs?.length) { setDues({ overdue: [], soon: [] }); setDuesLoading(false); return }
+
+    const enrolIds = [...new Set(installs.map(i => i.enrollment_id).filter(Boolean))]
+    const { data: enrols } = await supabase
+      .from('enrollments').select('id, person_id, batch_member_id').in('id', enrolIds)
+
+    const memberIds = [...new Set((enrols || []).map(e => e.batch_member_id).filter(Boolean))]
+    let bmMap = {}
+    if (memberIds.length) {
+      const { data: bms } = await supabase
+        .from('batch_members')
+        .select('id, batch_id, people(id, full_name), batches(id, name)')
+        .in('id', memberIds)
+      ;(bms || []).forEach(bm => { bmMap[bm.id] = bm })
+    }
+
+    const enrolMap = {}
+    ;(enrols || []).forEach(e => { enrolMap[e.id] = e })
+
+    const rows = installs.map(i => {
+      const enr = enrolMap[i.enrollment_id]
+      const bm = enr ? bmMap[enr.batch_member_id] : null
+      return {
+        ...i,
+        person_id: bm?.people?.id || enr?.person_id,
+        full_name: bm?.people?.full_name || '—',
+        batch_id: bm?.batch_id,
+        batch_name: bm?.batches?.name || '—',
+        context: `${bm?.people?.full_name || '—'} — ${bm?.batches?.name || '—'}`,
+      }
+    })
+
+    setDues({
+      overdue: rows.filter(r => r.due_date < today),
+      soon: rows.filter(r => r.due_date >= today),
+    })
+    setDuesLoading(false)
   }
 
   function set(k) { return e => setForm(f => ({ ...f, [k]: e.target.value })) }
@@ -128,6 +208,9 @@ export default function Yoga() {
     return true
   })
 
+  const dueRows = duesTab === 'overdue' ? dues.overdue : dues.soon
+  const dueTotal = dueRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
+
   return (
     <div className="p-6">
       <div className="flex items-start justify-between mb-6">
@@ -141,6 +224,80 @@ export default function Yoga() {
         >
           <Plus size={16} /> Add Batch
         </button>
+      </div>
+
+      {/* ── Dues panel ── */}
+      <div className="bg-white rounded-xl border border-gray-200 mb-5">
+        <div className="flex items-center gap-1 px-4 pt-4 pb-0 border-b border-gray-100">
+          <h2 className="text-sm font-semibold text-gray-800 mr-3">Dues</h2>
+          {['overdue', 'soon'].map(t => (
+            <button key={t} onClick={() => setDuesTab(t)}
+              className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${duesTab === t ? 'border-[#1742b5] text-[#1742b5]' : 'border-transparent text-gray-500 hover:text-gray-700'}`}>
+              {t === 'overdue' ? 'Overdue' : 'Due in 7 days'}
+              {!duesLoading && (
+                <span className={`ml-1.5 text-xs px-1.5 py-0.5 rounded-full ${t === 'overdue' ? (dues.overdue.length ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-500') : (dues.soon.length ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-500')}`}>
+                  {t === 'overdue' ? dues.overdue.length : dues.soon.length}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+        <div className="p-4">
+          {duesLoading ? (
+            <p className="text-sm text-gray-400 py-2">Loading…</p>
+          ) : dueRows.length === 0 ? (
+            <p className="text-sm text-gray-400 py-2">
+              {duesTab === 'overdue' ? 'Nothing overdue.' : 'Nothing due this week.'}
+            </p>
+          ) : (
+            <>
+              <table className="w-full text-sm mb-3">
+                <thead>
+                  <tr className="text-xs font-semibold text-gray-400 uppercase tracking-wide border-b border-gray-100">
+                    <th className="text-left pb-2 pr-4">Student</th>
+                    <th className="text-left pb-2 pr-4">Batch</th>
+                    <th className="text-left pb-2 pr-4">Due date</th>
+                    <th className="text-right pb-2 pr-4">Amount</th>
+                    <th className="pb-2 w-32" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {dueRows.map(r => (
+                    <tr key={r.id} className="border-b border-gray-50 last:border-0">
+                      <td className="py-2.5 pr-4">
+                        {r.person_id ? (
+                          <Link to={`/people/${r.person_id}`} className="font-medium text-gray-800 hover:text-[#1742b5]">
+                            {r.full_name}
+                          </Link>
+                        ) : (
+                          <span className="text-gray-800">{r.full_name}</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 pr-4">
+                        {r.batch_id ? (
+                          <Link to={`/yoga/${r.batch_id}`} className="text-gray-600 hover:text-[#1742b5]">{r.batch_name}</Link>
+                        ) : (
+                          <span className="text-gray-600">{r.batch_name}</span>
+                        )}
+                      </td>
+                      <td className="py-2.5 pr-4 text-gray-600 text-xs">{fmtDate(r.due_date)}</td>
+                      <td className="py-2.5 pr-4 text-right text-gray-800">₹{Number(r.amount).toLocaleString('en-IN')}</td>
+                      <td className="py-2.5 text-right">
+                        <button onClick={() => setPayDue(r)}
+                          className="text-xs font-medium text-[#1742b5] border border-[#1742b5]/30 px-2.5 py-1 rounded-lg hover:bg-[#1742b5]/5 transition-colors whitespace-nowrap">
+                          Record payment
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div className="text-xs text-gray-500 text-right border-t border-gray-100 pt-2">
+                Total: <span className="font-semibold text-gray-800">₹{dueTotal.toLocaleString('en-IN')}</span>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       <div className="flex gap-3 mb-5">
@@ -290,6 +447,14 @@ export default function Yoga() {
             </div>
           </div>
         </div>
+      )}
+
+      {payDue && (
+        <RecordPaymentModal
+          due={payDue}
+          onClose={() => setPayDue(null)}
+          onSuccess={() => { setPayDue(null); loadDues() }}
+        />
       )}
     </div>
   )

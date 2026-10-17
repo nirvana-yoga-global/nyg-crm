@@ -233,10 +233,22 @@ const BATCH_MEMBER_STATUS_BADGE = {
   left:   'bg-gray-100 text-gray-500',
 }
 
+function localToday() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function addDays(dateStr, days) {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const dt = new Date(y, m - 1, d + days)
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+}
+
 function EnrollmentsTab({ person }) {
   const [leads, setLeads] = useState([])
   const [enrolments, setEnrolments] = useState([])
   const [batchMemberships, setBatchMemberships] = useState([])
+  const [batchDues, setBatchDues] = useState({})
   const [leadsError, setLeadsError] = useState('')
   const [enrolmentsError, setEnrolmentsError] = useState('')
   const [batchError, setBatchError] = useState('')
@@ -265,8 +277,40 @@ function EnrollmentsTab({ person }) {
       else setLeads(leadsRes.data || [])
       if (enrolRes.error) setEnrolmentsError(enrolRes.error.message)
       else setEnrolments(enrolRes.data || [])
-      if (batchRes.error) setBatchError(batchRes.error.message)
-      else setBatchMemberships(batchRes.data || [])
+      if (batchRes.error) { setBatchError(batchRes.error.message); setLoading(false); return }
+      const bms = batchRes.data || []
+      setBatchMemberships(bms)
+
+      // Load monthly dues for each batch membership
+      if (bms.length) {
+        const memberIds = bms.map(m => m.id)
+        const { data: memberEnrols } = await supabase
+          .from('enrollments').select('id, batch_member_id').in('batch_member_id', memberIds)
+        if (memberEnrols?.length) {
+          const enrolIdMap = {}
+          memberEnrols.forEach(e => { enrolIdMap[e.batch_member_id] = e.id })
+          const enrolIds = memberEnrols.map(e => e.id)
+          const { data: installs } = await supabase
+            .from('installments')
+            .select('id, enrollment_id, status, due_date, amount, paid_date, payment_method')
+            .in('enrollment_id', enrolIds)
+            .eq('kind', 'monthly')
+            .order('due_date', { ascending: false })
+          const installMap = {}
+          ;(installs || []).forEach(i => {
+            if (!installMap[i.enrollment_id]) installMap[i.enrollment_id] = []
+            installMap[i.enrollment_id].push(i)
+          })
+          const result = {}
+          bms.forEach(m => {
+            const enrolId = enrolIdMap[m.id]
+            const all = enrolId ? (installMap[enrolId] || []) : []
+            result[m.id] = { pending: all.find(i => i.status === 'pending') || null, history: all.slice(0, 5) }
+          })
+          setBatchDues(result)
+        }
+      }
+
       setLoading(false)
     }
     load()
@@ -359,43 +403,87 @@ function EnrollmentsTab({ person }) {
         ) : batchMemberships.length === 0 ? (
           <p className="text-sm text-gray-400">Not in any batch.</p>
         ) : (
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-gray-100">
-                <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide pb-2 pr-4">Batch</th>
-                <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide pb-2 pr-4">Status</th>
-                <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide pb-2 pr-4">Start</th>
-                <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide pb-2 pr-4">End</th>
-                <th className="text-right text-xs font-semibold text-gray-400 uppercase tracking-wide pb-2">Fee/mo</th>
-              </tr>
-            </thead>
-            <tbody>
-              {batchMemberships.map(m => {
-                const fee = m.monthly_fee_override != null ? m.monthly_fee_override : m.batches?.monthly_fee
-                return (
-                  <tr key={m.id} className="border-b border-gray-50 last:border-0">
-                    <td className="py-3 pr-4">
-                      <Link to={`/yoga/${m.batches?.id}`} className="text-sm font-medium text-gray-800 hover:text-[#1742b5]">
+          <div className="space-y-4">
+            {batchMemberships.map(m => {
+              const fee = m.monthly_fee_override != null ? m.monthly_fee_override : m.batches?.monthly_fee
+              const dues = batchDues[m.id]
+              const pending = dues?.pending
+              const history = dues?.history || []
+              const today = localToday()
+              const in7 = addDays(today, 7)
+              const overdue = pending && pending.due_date < today
+              const soon = pending && !overdue && pending.due_date <= in7
+              return (
+                <div key={m.id} className="border border-gray-100 rounded-xl p-4">
+                  <div className="flex items-start justify-between mb-2">
+                    <div>
+                      <Link to={`/yoga/${m.batches?.id}`} className="text-sm font-semibold text-gray-800 hover:text-[#1742b5]">
                         {m.batches?.name || '—'}
                       </Link>
-                      {m.batches?.course && <div className="text-xs text-gray-400">{m.batches.course}</div>}
-                    </td>
-                    <td className="py-3 pr-4">
+                      {m.batches?.course && <span className="ml-2 text-xs text-gray-400">{m.batches.course}</span>}
+                    </div>
+                    <div className="flex items-center gap-2">
                       <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${BATCH_MEMBER_STATUS_BADGE[m.status] ?? 'bg-gray-100 text-gray-600'}`}>
                         {m.status}
                       </span>
-                    </td>
-                    <td className="py-3 pr-4 text-sm text-gray-500">{m.start_date ? fmtDate(m.start_date) : '—'}</td>
-                    <td className="py-3 pr-4 text-sm text-gray-500">{m.end_date ? fmtDate(m.end_date) : '—'}</td>
-                    <td className="py-3 text-sm text-gray-800 text-right">
-                      {fee != null ? `₹${Number(fee).toLocaleString('en-IN')}` : '—'}
-                      {m.monthly_fee_override != null && <span className="ml-1 text-xs text-amber-600">custom</span>}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
+                    </div>
+                  </div>
+                  <div className="flex gap-6 text-xs text-gray-500 mb-3">
+                    <span>Start: <span className="text-gray-700">{m.start_date ? fmtDate(m.start_date) : '—'}</span></span>
+                    {m.end_date && <span>End: <span className="text-gray-700">{fmtDate(m.end_date)}</span></span>}
+                    <span>Fee: <span className="text-gray-700">
+                      {fee != null ? `₹${Number(fee).toLocaleString('en-IN')}/mo` : '—'}
+                      {m.monthly_fee_override != null && <span className="ml-1 text-amber-600">custom</span>}
+                    </span></span>
+                  </div>
+                  {pending ? (
+                    <div className="flex items-center gap-2 text-xs mb-3">
+                      <span className="text-gray-500">Next due:</span>
+                      <span className="font-medium text-gray-700">{fmtDate(pending.due_date)} · ₹{Number(pending.amount).toLocaleString('en-IN')}</span>
+                      {overdue && <span className="bg-red-100 text-red-700 font-medium px-1.5 py-0.5 rounded-full">Overdue</span>}
+                      {soon && <span className="bg-amber-100 text-amber-700 font-medium px-1.5 py-0.5 rounded-full">Due soon</span>}
+                    </div>
+                  ) : null}
+                  {history.length > 0 && (
+                    <div className="rounded-lg border border-gray-100 overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="bg-gray-50 border-b border-gray-100 text-gray-400 font-semibold uppercase tracking-wide">
+                            <th className="text-left px-3 py-1.5">Due date</th>
+                            <th className="text-right px-3 py-1.5">Amount</th>
+                            <th className="text-left px-3 py-1.5">Status</th>
+                            <th className="text-left px-3 py-1.5">Paid</th>
+                            <th className="text-left px-3 py-1.5">Method</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {history.map(inst => {
+                            const today2 = localToday()
+                            const isPaid = inst.status === 'paid'
+                            const isOvd = inst.status === 'pending' && inst.due_date < today2
+                            const statusCls = isPaid ? 'bg-green-100 text-green-700' : isOvd ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
+                            return (
+                              <tr key={inst.id} className="border-b border-gray-100 last:border-0">
+                                <td className="px-3 py-1.5 text-gray-700">{fmtDate(inst.due_date)}</td>
+                                <td className="px-3 py-1.5 text-right text-gray-700">₹{Number(inst.amount).toLocaleString('en-IN')}</td>
+                                <td className="px-3 py-1.5">
+                                  <span className={`font-medium px-1.5 py-0.5 rounded-full capitalize ${statusCls}`}>
+                                    {isOvd ? 'overdue' : inst.status}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-1.5 text-gray-500">{inst.paid_date ? fmtDate(inst.paid_date) : '—'}</td>
+                                <td className="px-3 py-1.5 text-gray-500">{inst.payment_method || '—'}</td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         )}
       </div>
 
