@@ -774,13 +774,30 @@ function DetailsTab({ batch, setBatch }) {
     location_or_link: batch.location_or_link || '',
     status: batch.status || 'active',
     notes: batch.notes || '',
+    teacher_profile_id: batch.teacher_profile_id || '',
   })
   const [saving, setSaving] = useState(false)
   const [saveErr, setSaveErr] = useState('')
+  const [facultyProfiles, setFacultyProfiles] = useState([])
 
   const allCourses = useCourses({ batchesOnly: true, includeValue: form.course || undefined })
 
+  useEffect(() => {
+    supabase.from('profiles').select('id, full_name').eq('role', 'faculty').order('full_name')
+      .then(({ data }) => setFacultyProfiles(data || []))
+  }, [])
+
   function setF(k) { return e => setForm(f => ({ ...f, [k]: e.target.value })) }
+
+  function handleTeacherProfileChange(e) {
+    const val = e.target.value
+    const profile = facultyProfiles.find(p => p.id === val)
+    setForm(f => ({
+      ...f,
+      teacher_profile_id: val,
+      teacher_name: (!f.teacher_name.trim() && profile) ? profile.full_name : f.teacher_name,
+    }))
+  }
   function toggleDay(d) { setForm(f => ({ ...f, days: f.days.includes(d) ? f.days.filter(x => x !== d) : [...f.days, d] })) }
 
   async function handleSave() {
@@ -798,6 +815,7 @@ function DetailsTab({ batch, setBatch }) {
       location_or_link: n(form.location_or_link.trim()),
       status: form.status,
       notes: n(form.notes.trim()),
+      teacher_profile_id: n(form.teacher_profile_id),
     }
     const { data, error } = await supabase.from('batches').update(payload).eq('id', batch.id).select().single()
     if (error) { setSaveErr(error.message); setSaving(false); return }
@@ -816,6 +834,9 @@ function DetailsTab({ batch, setBatch }) {
         <dl className="grid grid-cols-2 gap-x-8 gap-y-3 text-sm">
           <div><dt className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-0.5">Course</dt><dd className="text-gray-800">{batch.course || '—'}</dd></div>
           <div><dt className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-0.5">Teacher</dt><dd className="text-gray-800">{batch.teacher_name || '—'}</dd></div>
+          {batch.teacher_profile_id && (
+            <div><dt className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-0.5">Teacher Login</dt><dd className="text-gray-800">{facultyProfiles.find(p => p.id === batch.teacher_profile_id)?.full_name || '—'}</dd></div>
+          )}
           <div><dt className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-0.5">Mode</dt><dd className="text-gray-800">{batch.mode}</dd></div>
           <div><dt className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-0.5">Status</dt><dd className="text-gray-800 capitalize">{batch.status}</dd></div>
           <div className="col-span-2"><dt className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-0.5">Schedule</dt><dd className="text-gray-800">{formatSchedule(batch)}</dd></div>
@@ -845,6 +866,17 @@ function DetailsTab({ batch, setBatch }) {
         <div>
           <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Teacher</label>
           <input value={form.teacher_name} onChange={setF('teacher_name')} className={inputCls2} />
+        </div>
+        <div className="col-span-2">
+          <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Teacher Login</label>
+          {facultyProfiles.length === 0 ? (
+            <p className="text-xs text-gray-400 py-1.5">No faculty logins yet. Set a person's role to faculty in Supabase.</p>
+          ) : (
+            <select value={form.teacher_profile_id} onChange={handleTeacherProfileChange} className={inputCls2}>
+              <option value="">None</option>
+              {facultyProfiles.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+            </select>
+          )}
         </div>
         <div>
           <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Mode</label>

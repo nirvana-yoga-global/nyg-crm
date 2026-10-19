@@ -53,7 +53,7 @@ const STATUS_BADGE = {
 const EMPTY_BATCH = {
   name: '', course: '', teacher_name: '', mode: 'Offline',
   days: [], start_time: '', end_time: '', monthly_fee: '',
-  location_or_link: '', status: 'active', notes: '',
+  location_or_link: '', status: 'active', notes: '', teacher_profile_id: '',
 }
 
 const inputCls = 'w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1742b5]/20 focus:border-[#1742b5]'
@@ -71,6 +71,7 @@ export default function Yoga() {
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [memberCounts, setMemberCounts] = useState({})
+  const [facultyProfiles, setFacultyProfiles] = useState([])
 
   // Dues panel
   const [dues, setDues] = useState({ overdue: [], soon: [] })
@@ -83,8 +84,16 @@ export default function Yoga() {
 
   useEffect(() => {
     fetchBatches()
-    if (!isFaculty) loadDues()
+    if (!isFaculty) {
+      loadDues()
+      fetchFacultyProfiles()
+    }
   }, [])
+
+  async function fetchFacultyProfiles() {
+    const { data } = await supabase.from('profiles').select('id, full_name').eq('role', 'faculty').order('full_name')
+    setFacultyProfiles(data || [])
+  }
 
   async function fetchBatches() {
     const { data } = await supabase.from('batches').select('*').order('created_at', { ascending: true })
@@ -158,6 +167,16 @@ export default function Yoga() {
 
   function n(v) { return v === '' || v == null ? null : v }
 
+  function handleTeacherProfileChange(e) {
+    const val = e.target.value
+    const profile = facultyProfiles.find(p => p.id === val)
+    setForm(f => ({
+      ...f,
+      teacher_profile_id: val,
+      teacher_name: (!f.teacher_name.trim() && profile) ? profile.full_name : f.teacher_name,
+    }))
+  }
+
   function openAdd() {
     setEditingBatch(null); setForm(EMPTY_BATCH); setSaveError(''); setShowModal(true)
   }
@@ -176,6 +195,7 @@ export default function Yoga() {
       location_or_link: b.location_or_link || '',
       status: b.status || 'active',
       notes: b.notes || '',
+      teacher_profile_id: b.teacher_profile_id || '',
     })
     setSaveError(''); setShowModal(true)
   }
@@ -195,6 +215,7 @@ export default function Yoga() {
       location_or_link: n(form.location_or_link.trim()),
       status: form.status,
       notes: n(form.notes.trim()),
+      teacher_profile_id: n(form.teacher_profile_id),
     }
     const query = editingBatch
       ? supabase.from('batches').update(payload).eq('id', editingBatch.id)
@@ -391,6 +412,19 @@ export default function Yoga() {
                   <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Teacher</label>
                   <input value={form.teacher_name} onChange={set('teacher_name')} placeholder="Teacher name" className={inputCls} />
                 </div>
+                {!isFaculty && (
+                  <div className="col-span-2">
+                    <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Teacher Login</label>
+                    {facultyProfiles.length === 0 ? (
+                      <p className="text-xs text-gray-400 py-1.5">No faculty logins yet. Set a person's role to faculty in Supabase.</p>
+                    ) : (
+                      <select value={form.teacher_profile_id} onChange={handleTeacherProfileChange} className={selectCls}>
+                        <option value="">None</option>
+                        {facultyProfiles.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+                      </select>
+                    )}
+                  </div>
+                )}
                 <div>
                   <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Mode</label>
                   <select value={form.mode} onChange={set('mode')} className={selectCls}>
