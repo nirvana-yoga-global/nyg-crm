@@ -243,6 +243,14 @@ Monthly installment cycle for yoga batch members. Migration: `supabase/add_batch
 - `fee_type` written as `'Monthly'` (Title case) to match the existing FeesTab/AddEnrollmentModal convention
 - Old FeesTab / AddInstallmentModal write Title-case status values (`'Pending'`, `'Paid'`); batch dues use lowercase — no CHECK constraint so both coexist
 
+## Faculty / Teacher
+
+- `profiles.role = 'faculty'` — same value used by the NYG Connect PWA; no new role value needed.
+- `batches.teacher_profile_id uuid` — FK to `profiles(id) ON DELETE SET NULL`; links a batch to the teacher's login. `batches.teacher_name` stays as free-text display name.
+- The `my_batch_ids()` SECURITY DEFINER function returns the batch IDs owned by the currently logged-in faculty member.
+- Teachers see only their own batches, those batches' members (students), and those batches' sessions and attendance. They have no access to leads, fees, dues, enrolments, or any other student records.
+- Migration: `supabase/add_faculty_role.sql`.
+
 ## Do NOT
 - Build mobile layouts — laptop only
 - Use any paid external services
