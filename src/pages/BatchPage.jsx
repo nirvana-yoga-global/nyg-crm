@@ -56,7 +56,7 @@ const MEMBER_STATUS_BADGE = {
 
 // ─── Students Tab ─────────────────────────────────────────────────────────────
 
-function StudentsTab({ batch, members, setMembers, memberDues, refreshDues }) {
+function StudentsTab({ batch, members, setMembers, memberDues, refreshDues, isFaculty }) {
   const today = localToday()
   const in7 = addDays(today, 7)
 
@@ -216,6 +216,41 @@ function StudentsTab({ batch, members, setMembers, memberDues, refreshDues }) {
   const feeDisplay = (m) => {
     const fee = m.monthly_fee_override != null ? m.monthly_fee_override : batch.monthly_fee
     return { text: fee != null ? `₹${Number(fee).toLocaleString('en-IN')}` : '—', custom: m.monthly_fee_override != null }
+  }
+
+  if (isFaculty) {
+    return (
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+        {members.length === 0 ? (
+          <p className="text-sm text-gray-400 p-6">No students enrolled.</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-gray-100 text-xs font-semibold text-gray-400 uppercase tracking-wide">
+                <th className="text-left px-4 py-3">Name</th>
+                <th className="text-left px-4 py-3">Phone</th>
+                <th className="text-left px-4 py-3">Start</th>
+                <th className="text-left px-4 py-3">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {members.map(m => (
+                <tr key={m.id} className="border-b border-gray-50 last:border-0">
+                  <td className="px-4 py-3 font-medium text-gray-900">{m.people?.full_name || '—'}</td>
+                  <td className="px-4 py-3 text-gray-600 text-xs">{m.people?.phone || '—'}</td>
+                  <td className="px-4 py-3 text-gray-600 text-xs">{fmtDate(m.start_date)}</td>
+                  <td className="px-4 py-3">
+                    <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${MEMBER_STATUS_BADGE[m.status] || 'bg-gray-100 text-gray-600'}`}>
+                      {m.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    )
   }
 
   return (
@@ -876,12 +911,13 @@ const TABS = ['Students', 'Attendance', 'Details']
 export default function BatchPage() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const { user, isFaculty } = useAuth()
   const [batch, setBatch] = useState(null)
   const [members, setMembers] = useState([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('Students')
   const [memberDues, setMemberDues] = useState({})
+  const visibleTabs = isFaculty ? ['Students', 'Attendance'] : TABS
 
   async function loadDues(membersList) {
     if (!membersList?.length) { setMemberDues({}); return }
@@ -929,7 +965,7 @@ export default function BatchPage() {
       const mData = mRes.data || []
       setMembers(mData)
       setLoading(false)
-      await loadDues(mData)
+      if (!isFaculty) await loadDues(mData)
     }
     load()
   }, [id])
@@ -960,7 +996,7 @@ export default function BatchPage() {
       </div>
 
       <div className="bg-white rounded-t-xl border border-gray-200 border-b-0 px-2 flex">
-        {TABS.map(tab => (
+        {visibleTabs.map(tab => (
           <button key={tab} onClick={() => setActiveTab(tab)}
             className={`px-5 py-3.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === tab ? 'border-[#1742b5] text-[#1742b5]' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-200'}`}>
             {tab}
@@ -975,6 +1011,7 @@ export default function BatchPage() {
             setMembers={setMembers}
             memberDues={memberDues}
             refreshDues={loadDues}
+            isFaculty={isFaculty}
           />
         )}
         {activeTab === 'Attendance' && <AttendanceTab batch={batch} members={members} userId={user?.id} />}

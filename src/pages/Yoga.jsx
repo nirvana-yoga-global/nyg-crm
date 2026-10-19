@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { Plus, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../context/AuthContext'
 import { useCourses } from '../hooks/useCourses'
 import RecordPaymentModal from '../components/RecordPaymentModal'
 
@@ -59,6 +60,7 @@ const inputCls = 'w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-
 const selectCls = inputCls
 
 export default function Yoga() {
+  const { isFaculty } = useAuth()
   const [batches, setBatches] = useState([])
   const [loading, setLoading] = useState(true)
   const [filterStatus, setFilterStatus] = useState('active')
@@ -81,7 +83,7 @@ export default function Yoga() {
 
   useEffect(() => {
     fetchBatches()
-    loadDues()
+    if (!isFaculty) loadDues()
   }, [])
 
   async function fetchBatches() {
@@ -218,16 +220,18 @@ export default function Yoga() {
           <h1 className="text-xl font-bold text-gray-900">Yoga Batches</h1>
           <p className="text-xs text-gray-400 mt-0.5">{loading ? '…' : `${visible.length} batch${visible.length !== 1 ? 'es' : ''}`}</p>
         </div>
-        <button
-          onClick={openAdd}
-          className="flex items-center gap-2 bg-[#1742b5] text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-[#1338a0] transition-colors"
-        >
-          <Plus size={16} /> Add Batch
-        </button>
+        {!isFaculty && (
+          <button
+            onClick={openAdd}
+            className="flex items-center gap-2 bg-[#1742b5] text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-[#1338a0] transition-colors"
+          >
+            <Plus size={16} /> Add Batch
+          </button>
+        )}
       </div>
 
       {/* ── Dues panel ── */}
-      <div className="bg-white rounded-xl border border-gray-200 mb-5">
+      {!isFaculty && <div className="bg-white rounded-xl border border-gray-200 mb-5">
         <div className="flex items-center gap-1 px-4 pt-4 pb-0 border-b border-gray-100">
           <h2 className="text-sm font-semibold text-gray-800 mr-3">Dues</h2>
           {['overdue', 'soon'].map(t => (
@@ -298,7 +302,7 @@ export default function Yoga() {
             </>
           )}
         </div>
-      </div>
+      </div>}
 
       <div className="flex gap-3 mb-5">
         <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1742b5] text-gray-700">
@@ -326,10 +330,10 @@ export default function Yoga() {
                 <th className="text-left px-4 py-3">Schedule</th>
                 <th className="text-left px-4 py-3">Teacher</th>
                 <th className="text-left px-4 py-3">Mode</th>
-                <th className="text-right px-4 py-3">Fee/mo</th>
+                {!isFaculty && <th className="text-right px-4 py-3">Fee/mo</th>}
                 <th className="text-right px-4 py-3">Active</th>
                 <th className="text-left px-4 py-3">Status</th>
-                <th className="px-4 py-3 w-12" />
+                {!isFaculty && <th className="px-4 py-3 w-12" />}
               </tr>
             </thead>
             <tbody>
@@ -346,14 +350,16 @@ export default function Yoga() {
                   <td className="px-4 py-3 text-gray-600 text-xs">{formatSchedule(b)}</td>
                   <td className="px-4 py-3 text-gray-600">{b.teacher_name || '—'}</td>
                   <td className="px-4 py-3 text-gray-600">{b.mode}</td>
-                  <td className="px-4 py-3 text-right text-gray-800">{b.monthly_fee != null ? `₹${Number(b.monthly_fee).toLocaleString('en-IN')}` : '—'}</td>
+                  {!isFaculty && <td className="px-4 py-3 text-right text-gray-800">{b.monthly_fee != null ? `₹${Number(b.monthly_fee).toLocaleString('en-IN')}` : '—'}</td>}
                   <td className="px-4 py-3 text-right text-gray-800">{memberCounts[b.id] || 0}</td>
                   <td className="px-4 py-3">
                     <span className={`text-xs font-medium px-2 py-0.5 rounded-full capitalize ${STATUS_BADGE[b.status] || 'bg-gray-100 text-gray-500'}`}>{b.status}</span>
                   </td>
-                  <td className="px-4 py-3">
-                    <button onClick={() => openEdit(b)} className="text-xs text-gray-400 hover:text-gray-700 underline">Edit</button>
-                  </td>
+                  {!isFaculty && (
+                    <td className="px-4 py-3">
+                      <button onClick={() => openEdit(b)} className="text-xs text-gray-400 hover:text-gray-700 underline">Edit</button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './context/AuthContext'
 import Layout from './components/Layout'
 import Login from './pages/Login'
@@ -17,7 +17,7 @@ import Yoga from './pages/Yoga'
 import BatchPage from './pages/BatchPage'
 
 function AppContent() {
-  const { user, isAdmin, loading } = useAuth()
+  const { user, isAdmin, isFaculty, loading } = useAuth()
 
   if (loading) {
     return (
@@ -33,27 +33,42 @@ function AppContent() {
   }
 
   if (!user) return <Login />
-  if (!isAdmin) return <AccessDenied />
 
-  return (
-    <Layout>
-      <Routes>
-        <Route path="/" element={<Dashboard />} />
-        <Route path="/leads" element={<Leads />} />
-        <Route path="/people" element={<People />} />
-        <Route path="/people/:id" element={<PersonProfile />} />
-        <Route path="/students" element={<Students />} />
-        <Route path="/students/:id" element={<StudentProfile />} />
-        <Route path="/fees" element={<Fees />} />
-        <Route path="/araiki" element={<Araiki />} />
-        <Route path="/yoga" element={<Yoga />} />
-        <Route path="/yoga/:id" element={<BatchPage />} />
-        <Route path="/meetups" element={<Meetups />} />
-        <Route path="/settings" element={<Settings />} />
-        <Route path="/access-denied" element={<AccessDenied />} />
-      </Routes>
-    </Layout>
-  )
+  if (isAdmin) {
+    return (
+      <Layout>
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/leads" element={<Leads />} />
+          <Route path="/people" element={<People />} />
+          <Route path="/people/:id" element={<PersonProfile />} />
+          <Route path="/students" element={<Students />} />
+          <Route path="/students/:id" element={<StudentProfile />} />
+          <Route path="/fees" element={<Fees />} />
+          <Route path="/araiki" element={<Araiki />} />
+          <Route path="/yoga" element={<Yoga />} />
+          <Route path="/yoga/:id" element={<BatchPage />} />
+          <Route path="/meetups" element={<Meetups />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="/access-denied" element={<AccessDenied />} />
+        </Routes>
+      </Layout>
+    )
+  }
+
+  if (isFaculty) {
+    return (
+      <Layout>
+        <Routes>
+          <Route path="/yoga" element={<Yoga />} />
+          <Route path="/yoga/:id" element={<BatchPage />} />
+          <Route path="*" element={<Navigate to="/yoga" replace />} />
+        </Routes>
+      </Layout>
+    )
+  }
+
+  return <AccessDenied />
 }
 
 export default function App() {

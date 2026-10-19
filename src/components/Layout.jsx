@@ -19,7 +19,10 @@ const NAV_ITEMS = [
 ]
 
 export default function Layout({ children }) {
-  const { profile, signOut } = useAuth()
+  const { profile, signOut, isFaculty } = useAuth()
+  const navItems = isFaculty
+    ? [{ to: '/yoga', icon: Layers, label: 'Yoga' }]
+    : NAV_ITEMS
 
   return (
     <div className="flex min-h-screen">
@@ -39,7 +42,7 @@ export default function Layout({ children }) {
 
         {/* Navigation */}
         <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
-          {NAV_ITEMS.map(({ to, icon: Icon, label, end }) => (
+          {navItems.map(({ to, icon: Icon, label, end }) => (
             <NavLink
               key={to}
               to={to}

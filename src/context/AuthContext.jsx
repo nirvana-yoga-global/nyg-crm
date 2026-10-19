@@ -7,6 +7,7 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [profile, setProfile] = useState(null)
   const [isAdmin, setIsAdmin] = useState(false)
+  const [isFaculty, setIsFaculty] = useState(false)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -27,6 +28,7 @@ export function AuthProvider({ children }) {
         setUser(null)
         setProfile(null)
         setIsAdmin(false)
+        setIsFaculty(false)
         setLoading(false)
       }
     })
@@ -41,9 +43,11 @@ export function AuthProvider({ children }) {
         supabase.from('profiles').select('*').eq('id', userId).single(),
       ])
       setIsAdmin(adminFlag === true)
+      setIsFaculty(profileData?.role === 'faculty')
       setProfile(profileData)
     } catch {
       setIsAdmin(false)
+      setIsFaculty(false)
     } finally {
       setLoading(false)
     }
@@ -52,7 +56,7 @@ export function AuthProvider({ children }) {
   const signOut = () => supabase.auth.signOut()
 
   return (
-    <AuthContext.Provider value={{ user, profile, isAdmin, loading, signOut }}>
+    <AuthContext.Provider value={{ user, profile, isAdmin, isFaculty, loading, signOut }}>
       {children}
     </AuthContext.Provider>
   )
