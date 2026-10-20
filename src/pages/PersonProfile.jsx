@@ -31,8 +31,31 @@ function initials(name) {
   return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
 }
 
+const COMMUNITY_STATUS_LABELS = {
+  '':           'Not set',
+  not_invited:  'Not invited',
+  invited:      'Invited',
+  joined:       'Joined',
+  declined:     'Declined',
+  cant_reach:   "Can't reach",
+}
+
+const ARAIKI_FIELDS = [
+  ['reg_no',                'Reg no'],
+  ['enquiry_date',          'Enquiry date'],
+  ['class_dates',           'Class dates'],
+  ['first_degree_mode',     'First degree mode'],
+  ['practice_status',       'Practice status'],
+  ['event_confirmation',    'Event confirmation'],
+  ['current_level',         'Current level'],
+  ['follow_up_date',        'Follow up date'],
+  ['second_degree_mode',    'Second degree mode'],
+  ['second_degree_remarks', 'Second degree remarks'],
+  ['found_in_tabs',         'Found in tabs'],
+]
+
 // ── Details tab ───────────────────────────────────────────────────────────────
-function DetailsTab({ person, setPerson }) {
+function DetailsTab({ person, setPerson, programmes, whatsappGroups, araikiHistory, importDataError }) {
   const navigate = useNavigate()
   const [form, setForm] = useState({
     full_name: person.full_name || '',
@@ -47,6 +70,12 @@ function DetailsTab({ person, setPerson }) {
   const [showDelete, setShowDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteError, setDeleteError] = useState('')
+
+  const [communityStatus, setCommunityStatus]     = useState(person.community_status || '')
+  const [communityInvitedOn, setCommunityInvitedOn] = useState(person.community_invited_on || '')
+  const [communitySaving, setCommunitySaving]     = useState(false)
+  const [communitySaved, setCommunitySaved]       = useState(false)
+  const [communityError, setCommunityError]       = useState('')
 
   async function handleSave() {
     if (!form.full_name.trim()) { setError('Name is required.'); return }
@@ -88,6 +117,40 @@ function DetailsTab({ person, setPerson }) {
     navigate('/people')
   }
 
+  async function saveCommunity(status, invitedOn) {
+    setCommunitySaving(true)
+    setCommunityError('')
+    const { data, error: err } = await supabase
+      .from('people')
+      .update({
+        community_status:     status || null,
+        community_invited_on: invitedOn || null,
+      })
+      .eq('id', person.id)
+      .select()
+      .single()
+    if (err) { setCommunityError(err.message); setCommunitySaving(false); return }
+    setPerson(data)
+    setCommunitySaved(true)
+    setCommunitySaving(false)
+    setTimeout(() => setCommunitySaved(false), 2000)
+  }
+
+  // Import-data fields shown only when non-empty
+  const importFields = [
+    person.register_no   != null && ['Register no',    String(person.register_no)],
+    person.country                && ['Country',        person.country],
+    person.language               && ['Language',       person.language],
+    person.referred_by            && ['Referred by',    person.referred_by],
+    person.contact_via            && ['Contact via',    person.contact_via],
+    person.alternate_phone        && ['Alternate phone',person.alternate_phone],
+    person.person_type === 'contact' && ['Person type', 'Contact'],
+  ].filter(Boolean)
+
+  const araikiRows = araikiHistory
+    ? ARAIKI_FIELDS.filter(([key]) => araikiHistory[key])
+    : []
+
   return (
     <div className="space-y-5">
       {person.profile_id && (
@@ -105,6 +168,7 @@ function DetailsTab({ person, setPerson }) {
         </div>
       )}
 
+      {/* Core editable fields */}
       <div className="bg-white rounded-xl border border-gray-200 p-6">
         <div className="grid grid-cols-2 gap-x-6 gap-y-5">
           <div className="col-span-2">
@@ -175,6 +239,114 @@ function DetailsTab({ person, setPerson }) {
         </div>
       </div>
 
+      {/* Import-data details card */}
+      {importFields.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <h3 className="text-sm font-semibold text-gray-800 mb-4">Details</h3>
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-3">
+            {importFields.map(([label, value]) => (
+              <div key={label}>
+                <dt className="text-xs font-medium text-gray-400 uppercase tracking-wide">{label}</dt>
+                <dd className="text-sm text-gray-700 mt-0.5">{value}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
+
+      {/* Thapovanam Siddhashram community card */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-gray-800">Thapovanam Siddhashram community</h3>
+          {communitySaving && <span className="text-xs text-gray-400">Saving…</span>}
+          {communitySaved && <span className="text-xs text-green-600">Saved</span>}
+          {communityError && <span className="text-xs text-red-600">{communityError}</span>}
+        </div>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Status</label>
+            <select
+              value={communityStatus}
+              onChange={e => {
+                setCommunityStatus(e.target.value)
+                saveCommunity(e.target.value, communityInvitedOn)
+              }}
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1742b5]/20 focus:border-[#1742b5] bg-white"
+            >
+              {Object.entries(COMMUNITY_STATUS_LABELS).map(([val, label]) => (
+                <option key={val} value={val}>{label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Invited on</label>
+            <input
+              type="date"
+              value={communityInvitedOn}
+              onChange={e => setCommunityInvitedOn(e.target.value)}
+              onBlur={e => saveCommunity(communityStatus, e.target.value)}
+              className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1742b5]/20 focus:border-[#1742b5]"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Programmes card */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <h3 className="text-sm font-semibold text-gray-800 mb-4">Programmes</h3>
+        {importDataError ? (
+          <p className="text-sm text-red-600">{importDataError}</p>
+        ) : programmes.length === 0 ? (
+          <p className="text-sm text-gray-400">No programmes recorded.</p>
+        ) : (
+          <ul className="space-y-2">
+            {programmes.map(p => (
+              <li key={p.id} className="flex items-baseline gap-2">
+                <span className="text-sm text-gray-800">{p.programme}</span>
+                {p.source && (
+                  <span className="text-xs text-gray-400">{p.source}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* WhatsApp groups card */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <h3 className="text-sm font-semibold text-gray-800 mb-4">WhatsApp groups</h3>
+        {whatsappGroups.length === 0 ? (
+          <p className="text-sm text-gray-400">Not in any WhatsApp groups.</p>
+        ) : (
+          <ul className="space-y-2">
+            {whatsappGroups.map(entry => (
+              <li key={entry.id} className="flex items-baseline gap-2">
+                <span className="text-sm text-gray-800">{entry.whatsapp_groups?.name || '—'}</span>
+                {entry.name_in_group && (
+                  <span className="text-xs text-gray-400">saved as: {entry.name_in_group}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Araiki history card (only if row exists) */}
+      {araikiRows.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 p-6">
+          <h3 className="text-sm font-semibold text-gray-800 mb-4">Araiki history (from old records)</h3>
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-3">
+            {araikiRows.map(([key, label]) => (
+              <div key={key}>
+                <dt className="text-xs font-medium text-gray-400 uppercase tracking-wide">{label}</dt>
+                <dd className="text-sm text-gray-700 mt-0.5">{araikiHistory[key]}</dd>
+              </div>
+            ))}
+          </dl>
+        </div>
+      )}
+
+      {/* Delete student */}
       <div className="bg-white rounded-xl border border-gray-200 p-6">
         <h3 className="text-sm font-semibold text-gray-800 mb-1">Delete student</h3>
         <p className="text-sm text-gray-500 mb-4">
@@ -499,10 +671,44 @@ export default function PersonProfile() {
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('Details')
 
+  const [programmes, setProgrammes] = useState([])
+  const [whatsappGroups, setWhatsappGroups] = useState([])
+  const [araikiHistory, setAraikiHistory] = useState(null)
+  const [importDataError, setImportDataError] = useState('')
+  const [markingReviewed, setMarkingReviewed] = useState(false)
+
   useEffect(() => {
-    supabase.from('people').select('*').eq('id', id).single()
-      .then(({ data }) => { setPerson(data); setLoading(false) })
+    async function load() {
+      const [personRes, progRes, waRes, araikiRes] = await Promise.all([
+        supabase.from('people').select('*').eq('id', id).single(),
+        supabase.from('person_programmes').select('id, programme, source').eq('person_id', id).order('programme'),
+        supabase.from('person_whatsapp_groups').select('id, name_in_group, whatsapp_groups(name)').eq('person_id', id),
+        supabase.from('araiki_history').select('*').eq('person_id', id).maybeSingle(),
+      ])
+      if (personRes.data) setPerson(personRes.data)
+      const errors = [progRes, waRes, araikiRes]
+        .filter(r => r.error && !r.error.message?.includes('0 rows'))
+        .map(r => r.error.message)
+      if (errors.length) setImportDataError(errors.join(' · '))
+      if (!progRes.error) setProgrammes(progRes.data || [])
+      if (!waRes.error) setWhatsappGroups(waRes.data || [])
+      if (!araikiRes.error && araikiRes.data) setAraikiHistory(araikiRes.data)
+      setLoading(false)
+    }
+    load()
   }, [id])
+
+  async function markReviewed() {
+    setMarkingReviewed(true)
+    const { data } = await supabase
+      .from('people')
+      .update({ needs_review: false })
+      .eq('id', id)
+      .select()
+      .single()
+    if (data) setPerson(data)
+    setMarkingReviewed(false)
+  }
 
   if (loading) {
     return <div className="p-6 py-16 text-center text-gray-400 text-sm">Loading…</div>
@@ -520,6 +726,33 @@ export default function PersonProfile() {
         <ChevronLeft size={16} />
         Back to Students
       </button>
+
+      {/* Needs review banner */}
+      {person.needs_review && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-5 flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold text-amber-800">Needs review</p>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1">
+              {person.review_type && (
+                <span className="text-xs text-amber-700"><span className="font-medium">Type:</span> {person.review_type}</span>
+              )}
+              {person.review_pair && (
+                <span className="text-xs text-amber-700"><span className="font-medium">Pair:</span> {person.review_pair}</span>
+              )}
+              {person.review_note && (
+                <span className="text-xs text-amber-700"><span className="font-medium">Note:</span> {person.review_note}</span>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={markReviewed}
+            disabled={markingReviewed}
+            className="flex-shrink-0 px-3 py-1.5 text-xs font-medium text-amber-800 border border-amber-300 rounded-lg hover:bg-amber-100 disabled:opacity-50 transition-colors"
+          >
+            {markingReviewed ? 'Saving…' : 'Mark as reviewed'}
+          </button>
+        </div>
+      )}
 
       {/* Header card */}
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
@@ -558,7 +791,14 @@ export default function PersonProfile() {
       </div>
       <div className="border border-gray-200 border-t-0 rounded-b-xl bg-[#f8fafc] p-6 min-h-[300px]">
         {activeTab === 'Details' && (
-          <DetailsTab person={person} setPerson={setPerson} />
+          <DetailsTab
+            person={person}
+            setPerson={setPerson}
+            programmes={programmes}
+            whatsappGroups={whatsappGroups}
+            araikiHistory={araikiHistory}
+            importDataError={importDataError}
+          />
         )}
         {activeTab === 'Registration Form' && (
           <IntakeFormTab
