@@ -18,6 +18,14 @@ function normalizePhone(raw) {
   return d
 }
 
+const COMMUNITY_LABELS = {
+  not_invited: 'Not invited',
+  invited:     'Invited',
+  joined:      'Joined',
+  declined:    'Declined',
+  cant_reach:  "Can't reach",
+}
+
 function AddPersonModal({ onClose, onSaved, existingPeople }) {
   const [form, setForm] = useState({ full_name: '', phone: '', email: '', location: '', notes: '' })
   const [saving, setSaving] = useState(false)
@@ -151,90 +159,247 @@ function AddPersonModal({ onClose, onSaved, existingPeople }) {
 
 export default function People() {
   const navigate = useNavigate()
-  const [people, setPeople] = useState([])
-  const [formIds, setFormIds] = useState(new Set())
-  const [loading, setLoading] = useState(true)
-  const [loadError, setLoadError] = useState('')
-  const [search, setSearch] = useState('')
-  const [filter, setFilter] = useState('all')            // 'all' | 'connect' | 'no-app'
-  const [typeFilter, setTypeFilter] = useState('students') // 'all' | 'students' | 'contacts'
-  const [needsReview, setNeedsReview] = useState(false)
-  const [showCount, setShowCount] = useState(PAGE)
-  const [showAddModal, setShowAddModal] = useState(false)
+
+  // Core data
+  const [people, setPeople]         = useState([])
+  const [formIds, setFormIds]       = useState(new Set())
+  const [loading, setLoading]       = useState(true)
+  const [loadError, setLoadError]   = useState('')
+
+  // Invite-filter data (loaded in parallel with people)
+  const [programmeMap, setProgrammeMap]   = useState(new Map()) // person_id → Set<programme>
+  const [waMap, setWaMap]                 = useState(new Map()) // person_id → Set<group_id>
+  const [programmeList, setProgrammeList] = useState([])        // sorted distinct programme names
+  const [waGroupList, setWaGroupList]     = useState([])        // [{id, name, sort_order}]
+  const [countryList, setCountryList]     = useState([])        // sorted distinct countries
+
+  // Filter state
+  const [search, setSearch]               = useState('')
+  const [filter, setFilter]               = useState('all')         // 'all' | 'connect' | 'no-app'
+  const [typeFilter, setTypeFilter]       = useState('students')    // 'all' | 'students' | 'contacts'
+  const [needsReview, setNeedsReview]     = useState(false)
+  const [progFilter, setProgFilter]       = useState('')            // '' | '__none__' | programme name
+  const [waFilter, setWaFilter]           = useState('')            // '' | '__none__' | group_id
+  const [communityFilter, setCommunityFilter] = useState('')        // '' | '__null__' | status value
+  const [countryFilter, setCountryFilter] = useState('')            // '' | '__none__' | country name
+  const [showCount, setShowCount]         = useState(PAGE)
+  const [showAddModal, setShowAddModal]   = useState(false)
+  const [copyMsg, setCopyMsg]             = useState('')
 
   const fetchPeople = useCallback(async () => {
     setLoading(true)
     setLoadError('')
-    // Start forms fetch in parallel with the first people page
-    const formsPromise = supabase
-      .from('intake_forms')
-      .select('person_id')
-      .not('person_id', 'is', null)
 
-    // Page through all people in chunks of 1000
-    const allPeople = []
-    let from = 0
-    while (true) {
-      const { data, error } = await supabase
-        .from('people')
-        .select('id, full_name, phone, phone_normalized, email, location, profile_id, person_type, needs_review, country, register_no')
-        .order('full_name')
-        .order('id')
-        .range(from, from + CHUNK - 1)
-      if (error) { setLoadError(error.message); setLoading(false); return }
-      allPeople.push(...data)
-      if (data.length < CHUNK) break
-      from += CHUNK
+    // Helper: page through any query returning {data, error}
+    async function pageAll(queryFn) {
+      const all = []
+      let from = 0
+      while (true) {
+        const { data, error } = await queryFn(from)
+        if (error) return { data: null, error }
+        all.push(...data)
+        if (data.length < CHUNK) break
+        from += CHUNK
+      }
+      return { data: all, error: null }
     }
 
-    const { data: forms } = await formsPromise
-    setPeople(allPeople)
-    setFormIds(new Set((forms || []).map(f => f.person_id)))
+    // Run all fetches in parallel
+    const [peopleRes, progRes, waMembRes, formsRes, waGroupsRes] = await Promise.all([
+      pageAll(from => supabase
+        .from('people')
+        .select('id, full_name, phone, phone_normalized, email, location, profile_id, person_type, needs_review, country, register_no, community_status')
+        .order('full_name').order('id')
+        .range(from, from + CHUNK - 1)),
+      pageAll(from => supabase
+        .from('person_programmes')
+        .select('person_id, programme')
+        .order('id')
+        .range(from, from + CHUNK - 1)),
+      pageAll(from => supabase
+        .from('person_whatsapp_groups')
+        .select('person_id, group_id')
+        .order('id')
+        .range(from, from + CHUNK - 1)),
+      supabase.from('intake_forms').select('person_id').not('person_id', 'is', null),
+      supabase.from('whatsapp_groups').select('id, name, sort_order').eq('is_active', true).order('sort_order'),
+    ])
+
+    const firstError = peopleRes.error || progRes.error || waMembRes.error || formsRes.error
+    if (firstError) { setLoadError(firstError.message); setLoading(false); return }
+
+    // Build programme membership map
+    const progMap = new Map()
+    for (const r of progRes.data) {
+      if (!progMap.has(r.person_id)) progMap.set(r.person_id, new Set())
+      progMap.get(r.person_id).add(r.programme)
+    }
+
+    // Build WhatsApp group membership map
+    const waMemMap = new Map()
+    for (const r of waMembRes.data) {
+      if (!waMemMap.has(r.person_id)) waMemMap.set(r.person_id, new Set())
+      waMemMap.get(r.person_id).add(r.group_id)
+    }
+
+    // Distinct programmes — locale-aware sort (handles Malayalam script)
+    const allProgs = [...new Set(progRes.data.map(r => r.programme))].sort((a, b) =>
+      a.localeCompare(b, ['ml', 'en'])
+    )
+
+    // Distinct countries — India first, then alphabetical
+    const countriesRaw = new Set(peopleRes.data.map(p => p.country).filter(Boolean))
+    const countries = [...countriesRaw].sort((a, b) => {
+      if (a === 'India') return -1
+      if (b === 'India') return 1
+      return a.localeCompare(b)
+    })
+
+    setPeople(peopleRes.data)
+    setProgrammeMap(progMap)
+    setWaMap(waMemMap)
+    setProgrammeList(allProgs)
+    setWaGroupList(waGroupsRes.data || [])
+    setCountryList(countries)
+    setFormIds(new Set((formsRes.data || []).map(f => f.person_id)))
     setLoading(false)
   }, [])
 
   useEffect(() => { fetchPeople() }, [fetchPeople])
 
-  // Reset visible row count whenever any filter/search changes
-  useEffect(() => { setShowCount(PAGE) }, [search, typeFilter, needsReview, filter])
+  // Reset visible row count whenever any filter changes
+  useEffect(() => {
+    setShowCount(PAGE)
+  }, [search, typeFilter, needsReview, filter, progFilter, waFilter, communityFilter, countryFilter])
 
-  // Counts for type pills (computed from full dataset)
-  const studentsCount = people.filter(p => p.person_type !== 'contact').length
-  const contactsCount = people.filter(p => p.person_type === 'contact').length
-  const reviewCount   = people.filter(p => p.needs_review).length
-
-  const filtered = people.filter(p => {
-    if (typeFilter === 'students' && p.person_type === 'contact') return false
-    if (typeFilter === 'contacts' && p.person_type !== 'contact') return false
+  // ── Filtering ──────────────────────────────────────────────────────────────
+  // base = all filters applied EXCEPT the type-tab filter (so tab counts stay accurate)
+  const base = people.filter(p => {
     if (needsReview && !p.needs_review) return false
     if (filter === 'connect' && !p.profile_id) return false
-    if (filter === 'no-app' && p.profile_id) return false
+    if (filter === 'no-app'  &&  p.profile_id) return false
+
+    // Search (name, email, phone digits)
     const q = search.trim().toLowerCase()
-    if (!q) return true
-    if (p.full_name?.toLowerCase().includes(q)) return true
-    if (p.email?.toLowerCase().includes(q)) return true
-    const searchDigits = search.replace(/[^0-9]/g, '')
-    if (searchDigits && (
-      p.phone?.replace(/[^0-9]/g, '').includes(searchDigits) ||
-      p.phone_normalized?.includes(searchDigits)
-    )) return true
-    return false
+    if (q) {
+      const matchName  = p.full_name?.toLowerCase().includes(q)
+      const matchEmail = p.email?.toLowerCase().includes(q)
+      const digits     = search.replace(/[^0-9]/g, '')
+      const matchPhone = digits && (
+        p.phone?.replace(/[^0-9]/g, '').includes(digits) ||
+        p.phone_normalized?.includes(digits)
+      )
+      if (!matchName && !matchEmail && !matchPhone) return false
+    }
+
+    // Programme filter
+    if (progFilter === '__none__') {
+      if (programmeMap.has(p.id)) return false
+    } else if (progFilter) {
+      if (!programmeMap.get(p.id)?.has(progFilter)) return false
+    }
+
+    // WhatsApp group filter
+    if (waFilter === '__none__') {
+      if (waMap.has(p.id)) return false
+    } else if (waFilter) {
+      if (!waMap.get(p.id)?.has(waFilter)) return false
+    }
+
+    // Community status filter
+    if (communityFilter === '__null__') {
+      if (p.community_status != null) return false
+    } else if (communityFilter) {
+      if (p.community_status !== communityFilter) return false
+    }
+
+    // Country filter
+    if (countryFilter === '__none__') {
+      if (p.country) return false
+    } else if (countryFilter) {
+      if (p.country !== countryFilter) return false
+    }
+
+    return true
   })
+
+  // Tab counts — derived from base (so they respond to invite/search/account filters)
+  const studentsCount = base.filter(p => p.person_type !== 'contact').length
+  const contactsCount = base.filter(p => p.person_type === 'contact').length
+  const reviewCount   = base.filter(p => p.needs_review).length
+
+  // Apply type-tab filter on top of base
+  const filtered = typeFilter === 'students' ? base.filter(p => p.person_type !== 'contact')
+    : typeFilter === 'contacts' ? base.filter(p => p.person_type === 'contact')
+    : base
 
   const displayed = filtered.slice(0, showCount)
 
+  // ── Active filter chips ────────────────────────────────────────────────────
+  const activeChips = []
+  if (progFilter) {
+    const lbl = progFilter === '__none__' ? 'None' : progFilter
+    activeChips.push({ label: `Programme: ${lbl}`, onRemove: () => setProgFilter('') })
+  }
+  if (waFilter) {
+    const grpName = waFilter === '__none__' ? 'No group'
+      : (waGroupList.find(g => g.id === waFilter)?.name ?? waFilter)
+    activeChips.push({ label: `Group: ${grpName}`, onRemove: () => setWaFilter('') })
+  }
+  if (communityFilter) {
+    const COMM = {
+      '__null__': 'Not set', not_invited: 'Not invited', invited: 'Invited',
+      joined: 'Joined', declined: 'Declined', cant_reach: "Can't reach",
+    }
+    activeChips.push({ label: `Community: ${COMM[communityFilter] ?? communityFilter}`, onRemove: () => setCommunityFilter('') })
+  }
+  if (countryFilter) {
+    const lbl = countryFilter === '__none__' ? 'None' : countryFilter
+    activeChips.push({ label: `Country: ${lbl}`, onRemove: () => setCountryFilter('') })
+  }
+  const hasFilters = activeChips.length > 0
+
+  function clearFilters() {
+    setProgFilter('')
+    setWaFilter('')
+    setCommunityFilter('')
+    setCountryFilter('')
+  }
+
+  // ── Title ──────────────────────────────────────────────────────────────────
+  const titleLabel = needsReview ? 'Needs review'
+    : typeFilter === 'students' ? 'Students'
+    : typeFilter === 'contacts' ? 'Contacts'
+    : 'All people'
+
+  // ── Copy phones ────────────────────────────────────────────────────────────
+  async function handleCopyPhones() {
+    const phones = filtered
+      .filter(p => p.phone)
+      .map(p => p.phone_normalized ? '+' + p.phone_normalized : p.phone)
+    try {
+      await navigator.clipboard.writeText(phones.join('\n'))
+      setCopyMsg(`Copied ${phones.length} numbers`)
+    } catch {
+      setCopyMsg('Copy failed')
+    }
+    setTimeout(() => setCopyMsg(''), 3000)
+  }
+
+  // Dropdown class helper
+  const selCls = active =>
+    `px-3 py-1.5 text-xs rounded-lg border cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#1742b5]/20 transition-colors ${
+      active
+        ? 'border-[#1742b5] text-[#1742b5] bg-blue-50 font-medium'
+        : 'border-gray-200 text-gray-600 bg-white hover:border-gray-300'
+    }`
+
   return (
     <div className="p-6">
+      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900">
-          {needsReview
-            ? `Needs review (${reviewCount})`
-            : typeFilter === 'students'
-              ? `Students (${studentsCount})`
-              : typeFilter === 'contacts'
-                ? `Contacts (${contactsCount})`
-                : `All people (${people.length})`
-          }
+          {titleLabel} ({filtered.length})
         </h1>
         <button
           onClick={() => setShowAddModal(true)}
@@ -245,7 +410,7 @@ export default function People() {
         </button>
       </div>
 
-      {/* Row 1: search + Connect/No-app filter */}
+      {/* Row 1: search + account pills */}
       <div className="flex items-center gap-3 mb-3">
         <div className="relative flex-1 max-w-sm">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -279,10 +444,10 @@ export default function People() {
         </div>
       </div>
 
-      {/* Row 2: type filter + needs-review pill */}
-      <div className="flex items-center gap-1.5 mb-4">
+      {/* Row 2: type pills + Needs review pill */}
+      <div className="flex items-center gap-1.5 mb-3">
         {[
-          ['all',      `All (${people.length})`],
+          ['all',      `All (${base.length})`],
           ['students', `Students (${studentsCount})`],
           ['contacts', `Contacts (${contactsCount})`],
         ].map(([val, label]) => (
@@ -315,6 +480,80 @@ export default function People() {
           </Link>
         )}
       </div>
+
+      {/* Row 3: Invite filters + copy button */}
+      {!loading && !loadError && (
+        <div className="mb-4">
+          <div className="flex items-center gap-2 flex-wrap">
+            <select value={progFilter} onChange={e => setProgFilter(e.target.value)} className={selCls(!!progFilter)}>
+              <option value="">Any programme</option>
+              {programmeList.map(p => <option key={p} value={p}>{p}</option>)}
+              <option value="__none__">No programme</option>
+            </select>
+
+            <select value={waFilter} onChange={e => setWaFilter(e.target.value)} className={selCls(!!waFilter)}>
+              <option value="">Any group</option>
+              {waGroupList.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
+              <option value="__none__">In no group</option>
+            </select>
+
+            <select value={communityFilter} onChange={e => setCommunityFilter(e.target.value)} className={selCls(!!communityFilter)}>
+              <option value="">Any status</option>
+              <option value="__null__">Not set</option>
+              <option value="not_invited">Not invited</option>
+              <option value="invited">Invited</option>
+              <option value="joined">Joined</option>
+              <option value="declined">Declined</option>
+              <option value="cant_reach">Can't reach</option>
+            </select>
+
+            <select value={countryFilter} onChange={e => setCountryFilter(e.target.value)} className={selCls(!!countryFilter)}>
+              <option value="">Any country</option>
+              {countryList.map(c => <option key={c} value={c}>{c}</option>)}
+              <option value="__none__">No country</option>
+            </select>
+
+            <div className="ml-auto">
+              <button
+                onClick={handleCopyPhones}
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap ${
+                  copyMsg
+                    ? 'border-green-300 bg-green-50 text-green-700'
+                    : 'border-gray-200 text-gray-600 bg-white hover:border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                {copyMsg || 'Copy phone numbers'}
+              </button>
+            </div>
+          </div>
+
+          {/* Active filter chips */}
+          {hasFilters && (
+            <div className="flex flex-wrap items-center gap-1.5 mt-2">
+              {activeChips.map(({ label, onRemove }) => (
+                <span
+                  key={label}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium bg-[#1742b5]/10 text-[#1742b5] rounded-full"
+                >
+                  {label}
+                  <button
+                    onClick={onRemove}
+                    className="text-[#1742b5]/60 hover:text-[#1742b5] leading-none"
+                  >
+                    <X size={11} />
+                  </button>
+                </span>
+              ))}
+              <button
+                onClick={clearFilters}
+                className="text-xs text-gray-400 hover:text-gray-600 ml-1 underline underline-offset-2"
+              >
+                Clear filters
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {loading ? (
         <div className="py-16 text-center text-gray-400 text-sm">Loading…</div>
@@ -368,6 +607,15 @@ export default function People() {
                           )}
                           {formIds.has(p.id) && (
                             <span className="text-xs font-medium bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Form</span>
+                          )}
+                          {p.community_status && p.community_status !== 'not_invited' && (
+                            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                              p.community_status === 'invited' ? 'bg-blue-100 text-blue-700'
+                              : p.community_status === 'joined' ? 'bg-green-100 text-green-700'
+                              : 'bg-gray-100 text-gray-500'
+                            }`}>
+                              {COMMUNITY_LABELS[p.community_status]}
+                            </span>
                           )}
                         </div>
                       </td>
