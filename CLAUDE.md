@@ -273,6 +273,16 @@ All four tables have RLS ON with one admin-only ALL policy (inline role check). 
 - **person_programmes** — which LMS/Araiki programmes the person participated in; `programme text NOT NULL` (free text, may be Malayalam), `source text` (e.g. `'LMS'` or `'Araiki'`), `detail text`. Unique on `(person_id, programme)`.
 - **araiki_history** — read-only import of legacy Araiki spreadsheet data; all date/status columns stored as text. Fields: `reg_no`, `enquiry_date`, `class_dates`, `first_degree_mode`, `practice_status`, `event_confirmation`, `current_level`, `follow_up_date`, `second_degree_mode`, `second_degree_remarks`, `found_in_tabs`. Unique on `person_id`.
 
+## Merge people
+
+`public.merge_people(p_keep uuid, p_remove uuid)` — admin-only SECURITY DEFINER function. Moves all child records (enquiries, enrollments, batch memberships, attendance, intake form, araiki history, WhatsApp groups, programmes, attunements, progress, notes) from `p_remove` to `p_keep`, fills blank fields on `p_keep` from `p_remove` without overwriting, then deletes `p_remove` in one transaction. Call via `supabase.rpc('merge_people', { p_keep: '...', p_remove: '...' })`.
+
+Guard conditions that raise an exception: same UUID, either UUID not found, both have a Connect (profile_id) account, both active/paused in the same batch.
+
+Conflict resolution: batch_attendance duplicate rows are dropped (p_keep's record wins); person_whatsapp_groups / person_programmes use `ON CONFLICT DO NOTHING`; if both have an intake form, health details are optionally copied and a student note is added; if both have araiki history, p_keep's is kept and a summary note is added.
+
+After moving: `needs_review` is set to false and a merge audit entry is appended to `review_note`. Migration: `supabase/add_merge_people.sql`.
+
 ## Do NOT
 - Build mobile layouts — laptop only
 - Use any paid external services
