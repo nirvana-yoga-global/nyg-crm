@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { ChevronLeft } from 'lucide-react'
+import { ChevronLeft, Search, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 const CHUNK = 1000
@@ -26,6 +26,17 @@ function removeLabelFrom(reviewPair, label) {
   if (!reviewPair) return null
   const remaining = reviewPair.split(',').map(l => l.trim()).filter(l => l && l !== label)
   return remaining.length > 0 ? remaining.join(', ') : null
+}
+
+// Case-insensitive match on name, email, or phone digits.
+function personMatchesSearch(p, q) {
+  if (!q) return true
+  const lower = q.toLowerCase()
+  if (p.full_name?.toLowerCase().includes(lower)) return true
+  if (p.email?.toLowerCase().includes(lower)) return true
+  const digits = q.replace(/[^0-9]/g, '')
+  if (digits && p.phone?.replace(/[^0-9]/g, '').includes(digits)) return true
+  return false
 }
 
 // Name cell — grey italics for "Unnamed (" rows
@@ -55,7 +66,11 @@ function Field({ label, a, b }) {
 }
 
 // Merge confirmation modal
-function MergeModal({ keepName, removeName, onCancel, onConfirm, merging, error }) {
+function MergeModal({
+  keepName, keepPhone, keepLocation,
+  removeName, removePhone, removeLocation,
+  onCancel, onConfirm, merging, error,
+}) {
   return (
     <div
       className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4"
@@ -65,11 +80,19 @@ function MergeModal({ keepName, removeName, onCancel, onConfirm, merging, error 
         className="bg-white rounded-2xl w-full max-w-md shadow-xl p-6"
         onClick={e => e.stopPropagation()}
       >
-        <h2 className="text-base font-semibold text-gray-900 mb-3">Merge records?</h2>
-        <p className="text-sm text-gray-700 mb-2">
-          Merge <span className="font-semibold">{removeName}</span> into{' '}
-          <span className="font-semibold">{keepName}</span>?
-        </p>
+        <h2 className="text-base font-semibold text-gray-900 mb-4">Merge records?</h2>
+        <div className="flex gap-6 mb-4">
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-gray-900 truncate">{keepName || '—'}</p>
+            {keepPhone    && <p className="text-xs text-gray-500 mt-0.5">{keepPhone}</p>}
+            {keepLocation && <p className="text-xs text-gray-500">{keepLocation}</p>}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-gray-900 truncate">{removeName || '—'}</p>
+            {removePhone    && <p className="text-xs text-gray-500 mt-0.5">{removePhone}</p>}
+            {removeLocation && <p className="text-xs text-gray-500">{removeLocation}</p>}
+          </div>
+        </div>
         <p className="text-sm text-gray-500 mb-5">
           Their notes, programmes, WhatsApp groups, forms and payments move to{' '}
           <span className="font-medium text-gray-700">{keepName}</span>, and{' '}
@@ -94,7 +117,7 @@ function MergeModal({ keepName, removeName, onCancel, onConfirm, merging, error 
             disabled={merging}
             className="px-5 py-2 text-sm font-medium bg-[#1742b5] text-white rounded-lg hover:bg-[#1330a0] disabled:opacity-50 transition-colors"
           >
-            {merging ? 'Merging…' : 'Merge'}
+            {merging ? 'Merging…' : `Merge and delete ${removeName}`}
           </button>
         </div>
       </div>
@@ -104,17 +127,18 @@ function MergeModal({ keepName, removeName, onCancel, onConfirm, merging, error 
 
 export default function ReviewQueue() {
   const navigate = useNavigate()
-  const [pairPeople, setPairPeople]     = useState([])
-  const [otherPeople, setOtherPeople]   = useState([])
-  const [loading, setLoading]           = useState(true)
-  const [loadError, setLoadError]       = useState('')
-  const [activeTab, setActiveTab]       = useState('duplicates')
+  const [pairPeople, setPairPeople]         = useState([])
+  const [otherPeople, setOtherPeople]       = useState([])
+  const [loading, setLoading]               = useState(true)
+  const [loadError, setLoadError]           = useState('')
+  const [activeTab, setActiveTab]           = useState('duplicates')
   const [resolvedLabels, setResolvedLabels] = useState(new Set())
-  const [mergeModal, setMergeModal]     = useState(null) // { label, keepId, keepName, removeId, removeName }
-  const [merging, setMerging]           = useState(false)
-  const [mergeError, setMergeError]     = useState('')
-  const [successMsg, setSuccessMsg]     = useState('')
+  const [mergeModal, setMergeModal]         = useState(null)
+  const [merging, setMerging]               = useState(false)
+  const [mergeError, setMergeError]         = useState('')
+  const [successMsg, setSuccessMsg]         = useState('')
   const [otherShowCount, setOtherShowCount] = useState(PAGE)
+  const [search, setSearch]                 = useState('')
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -140,10 +164,17 @@ export default function ReviewQueue() {
 
   useEffect(() => { loadData() }, [loadData])
 
-  // Derived — recomputed on every render (small dataset, no useMemo needed)
-  const groupEntries = buildGroups(pairPeople, resolvedLabels)
-  const dupCount     = groupEntries.length
-  const otherCount   = otherPeople.length
+  // Derived — filtered by search
+  const allGroupEntries      = buildGroups(pairPeople, resolvedLabels)
+  const filteredGroupEntries = search
+    ? allGroupEntries.filter(([, members]) => members.some(p => personMatchesSearch(p, search)))
+    : allGroupEntries
+  const filteredOther = search
+    ? otherPeople.filter(p => personMatchesSearch(p, search))
+    : otherPeople
+
+  const dupCount   = filteredGroupEntries.length
+  const otherCount = filteredOther.length
 
   // ── Merge ──────────────────────────────────────────────────────────────────
   async function handleMerge() {
@@ -165,13 +196,13 @@ export default function ReviewQueue() {
     setMerging(false)
     setMergeModal(null)
     setSuccessMsg(`Merged ${mergeModal.removeName} into ${mergeModal.keepName}.`)
-    setTimeout(() => setSuccessMsg(''), 4000)
+    setTimeout(() => setSuccessMsg(''), 8000)
   }
 
   // ── Not the same person ────────────────────────────────────────────────────
   async function handleNotSamePerson(label, p1, p2) {
     const tasks = [p1, p2].map(async person => {
-      const newPair   = removeLabelFrom(person.review_pair, label)
+      const newPair     = removeLabelFrom(person.review_pair, label)
       const shouldClear = !newPair && person.review_type === 'Merge'
       const patch = { review_pair: newPair }
       if (shouldClear) patch.needs_review = false
@@ -205,6 +236,27 @@ export default function ReviewQueue() {
 
   return (
     <div className="p-6">
+
+      {/* Fixed success banner */}
+      {successMsg && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-3 bg-green-600 text-white text-sm font-medium px-5 py-3 rounded-xl shadow-lg whitespace-nowrap">
+          <span>{successMsg}</span>
+          <button onClick={() => setSuccessMsg('')} className="text-white/80 hover:text-white">
+            <X size={15} />
+          </button>
+        </div>
+      )}
+
+      {/* Fixed error banner */}
+      {loadError && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-3 bg-red-600 text-white text-sm font-medium px-5 py-3 rounded-xl shadow-lg whitespace-nowrap">
+          <span>{loadError}</span>
+          <button onClick={() => setLoadError('')} className="text-white/80 hover:text-white">
+            <X size={15} />
+          </button>
+        </div>
+      )}
+
       <button
         onClick={() => navigate('/people')}
         className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700 mb-5 transition-colors"
@@ -213,20 +265,28 @@ export default function ReviewQueue() {
         Back to Students
       </button>
 
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-5">
         <h1 className="text-2xl font-bold text-gray-900">Needs review</h1>
       </div>
 
-      {loadError && (
-        <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-4 py-3 rounded-lg mb-5">
-          {loadError}
-        </div>
-      )}
-      {successMsg && (
-        <div className="bg-green-50 border border-green-200 text-green-700 text-sm px-4 py-3 rounded-lg mb-5">
-          {successMsg}
-        </div>
-      )}
+      {/* Search */}
+      <div className="relative mb-5 max-w-sm">
+        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+        <input
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Search by name, phone or email…"
+          className="w-full pl-9 pr-9 py-2 text-sm border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-[#1742b5]/20 focus:border-[#1742b5]"
+        />
+        {search && (
+          <button
+            onClick={() => setSearch('')}
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-300 hover:text-gray-500"
+          >
+            <X size={14} />
+          </button>
+        )}
+      </div>
 
       {/* Tabs */}
       <div className="bg-white rounded-t-xl border border-gray-200 border-b-0 px-2 flex">
@@ -253,10 +313,12 @@ export default function ReviewQueue() {
         {/* ── Possible duplicates ── */}
         {activeTab === 'duplicates' && (
           <div className="space-y-5">
-            {groupEntries.length === 0 ? (
-              <p className="text-sm text-gray-400 py-10 text-center">No possible duplicates to review.</p>
+            {filteredGroupEntries.length === 0 ? (
+              <p className="text-sm text-gray-400 py-10 text-center">
+                {search ? 'No matches.' : 'No possible duplicates to review.'}
+              </p>
             ) : (
-              groupEntries.map(([label, members]) => {
+              filteredGroupEntries.map(([label, members]) => {
                 const p1 = members[0]
                 const p2 = members[1]
                 const extras = members.length - 2
@@ -313,8 +375,10 @@ export default function ReviewQueue() {
                       <button
                         onClick={() => setMergeModal({
                           label,
-                          keepId:     p1.id,   keepName:   p1.full_name,
-                          removeId:   p2.id,   removeName: p2.full_name,
+                          keepId:         p1.id,        keepName:       p1.full_name,
+                          keepPhone:      p1.phone,     keepLocation:   p1.location,
+                          removeId:       p2.id,        removeName:     p2.full_name,
+                          removePhone:    p2.phone,     removeLocation: p2.location,
                         })}
                         className="px-4 py-2 text-sm font-medium bg-[#1742b5] text-white rounded-lg hover:bg-[#1330a0] transition-colors"
                       >
@@ -323,8 +387,10 @@ export default function ReviewQueue() {
                       <button
                         onClick={() => setMergeModal({
                           label,
-                          keepId:     p2.id,   keepName:   p2.full_name,
-                          removeId:   p1.id,   removeName: p1.full_name,
+                          keepId:         p2.id,        keepName:       p2.full_name,
+                          keepPhone:      p2.phone,     keepLocation:   p2.location,
+                          removeId:       p1.id,        removeName:     p1.full_name,
+                          removePhone:    p1.phone,     removeLocation: p1.location,
                         })}
                         className="px-4 py-2 text-sm font-medium bg-[#1742b5] text-white rounded-lg hover:bg-[#1330a0] transition-colors"
                       >
@@ -347,8 +413,10 @@ export default function ReviewQueue() {
         {/* ── Other checks ── */}
         {activeTab === 'other' && (
           <div>
-            {otherPeople.length === 0 ? (
-              <p className="text-sm text-gray-400 py-10 text-center">No other items to review.</p>
+            {filteredOther.length === 0 ? (
+              <p className="text-sm text-gray-400 py-10 text-center">
+                {search ? 'No matches.' : 'No other items to review.'}
+              </p>
             ) : (
               <>
                 <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -363,7 +431,7 @@ export default function ReviewQueue() {
                       </tr>
                     </thead>
                     <tbody>
-                      {otherPeople.slice(0, otherShowCount).map(p => (
+                      {filteredOther.slice(0, otherShowCount).map(p => (
                         <tr key={p.id} className="border-b border-gray-50 last:border-0">
                           <td className="px-6 py-3">
                             {p.full_name?.startsWith('Unnamed (') ? (
@@ -414,18 +482,18 @@ export default function ReviewQueue() {
                   </table>
                 </div>
 
-                {otherPeople.length > otherShowCount && (
+                {filteredOther.length > otherShowCount && (
                   <div className="mt-4 text-center">
                     <button
                       onClick={() => setOtherShowCount(c => c + PAGE)}
                       className="px-6 py-2 text-sm font-medium text-[#1742b5] border border-[#1742b5]/30 rounded-lg hover:bg-[#1742b5]/5 transition-colors"
                     >
-                      Show more ({otherPeople.length - otherShowCount} remaining)
+                      Show more ({filteredOther.length - otherShowCount} remaining)
                     </button>
                   </div>
                 )}
                 <p className="mt-3 text-center text-xs text-gray-400">
-                  Showing {Math.min(otherShowCount, otherPeople.length)} of {otherPeople.length}
+                  Showing {Math.min(otherShowCount, filteredOther.length)} of {filteredOther.length}
                 </p>
               </>
             )}
@@ -437,7 +505,11 @@ export default function ReviewQueue() {
       {mergeModal && (
         <MergeModal
           keepName={mergeModal.keepName}
+          keepPhone={mergeModal.keepPhone}
+          keepLocation={mergeModal.keepLocation}
           removeName={mergeModal.removeName}
+          removePhone={mergeModal.removePhone}
+          removeLocation={mergeModal.removeLocation}
           onCancel={() => { if (!merging) { setMergeModal(null); setMergeError('') } }}
           onConfirm={handleMerge}
           merging={merging}

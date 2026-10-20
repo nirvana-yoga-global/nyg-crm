@@ -226,7 +226,16 @@ export default function People() {
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Students ({people.length})</h1>
+        <h1 className="text-2xl font-bold text-gray-900">
+          {needsReview
+            ? `Needs review (${reviewCount})`
+            : typeFilter === 'students'
+              ? `Students (${studentsCount})`
+              : typeFilter === 'contacts'
+                ? `Contacts (${contactsCount})`
+                : `All people (${people.length})`
+          }
+        </h1>
         <button
           onClick={() => setShowAddModal(true)}
           className="flex items-center gap-1.5 px-4 py-2 text-sm font-medium bg-[#1742b5] text-white rounded-lg hover:bg-[#1330a0] transition-colors"
@@ -256,7 +265,7 @@ export default function People() {
           )}
         </div>
         <div className="flex gap-1.5">
-          {[['all', 'All'], ['connect', 'Connect'], ['no-app', 'No app account']].map(([val, label]) => (
+          {[['all', 'Any account'], ['connect', 'Has app account'], ['no-app', 'No app account']].map(([val, label]) => (
             <button
               key={val}
               onClick={() => setFilter(val)}
