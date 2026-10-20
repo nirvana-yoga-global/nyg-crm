@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { Search, Plus, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
@@ -297,6 +297,14 @@ export default function People() {
         >
           Needs review ({reviewCount})
         </button>
+        {reviewCount > 0 && (
+          <Link
+            to="/people/review"
+            className="ml-auto text-xs font-medium text-[#1742b5] hover:underline px-1"
+          >
+            Review queue →
+          </Link>
+        )}
       </div>
 
       {loading ? (
