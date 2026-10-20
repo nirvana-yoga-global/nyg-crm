@@ -154,6 +154,7 @@ export default function People() {
   const [people, setPeople] = useState([])
   const [formIds, setFormIds] = useState(new Set())
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')            // 'all' | 'connect' | 'no-app'
   const [typeFilter, setTypeFilter] = useState('students') // 'all' | 'students' | 'contacts'
@@ -163,6 +164,7 @@ export default function People() {
 
   const fetchPeople = useCallback(async () => {
     setLoading(true)
+    setLoadError('')
     // Start forms fetch in parallel with the first people page
     const formsPromise = supabase
       .from('intake_forms')
@@ -173,13 +175,15 @@ export default function People() {
     const allPeople = []
     let from = 0
     while (true) {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('people')
         .select('id, full_name, phone, phone_normalized, email, location, profile_id, person_type, needs_review, country, register_no')
         .order('full_name')
+        .order('id')
         .range(from, from + CHUNK - 1)
-      allPeople.push(...(data || []))
-      if (!data || data.length < CHUNK) break
+      if (error) { setLoadError(error.message); setLoading(false); return }
+      allPeople.push(...data)
+      if (data.length < CHUNK) break
       from += CHUNK
     }
 
@@ -297,6 +301,8 @@ export default function People() {
 
       {loading ? (
         <div className="py-16 text-center text-gray-400 text-sm">Loading…</div>
+      ) : loadError ? (
+        <div className="py-16 text-center text-red-500 text-sm">Failed to load: {loadError}</div>
       ) : (
         <>
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
