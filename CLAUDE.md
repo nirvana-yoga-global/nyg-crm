@@ -251,6 +251,28 @@ Monthly installment cycle for yoga batch members. Migration: `supabase/add_batch
 - Teachers see only their own batches, those batches' members (students), and those batches' sessions and attendance. They have no access to leads, fees, dues, enrolments, or any other student records.
 - Migration: `supabase/add_faculty_role.sql`.
 
+## Member import
+
+Migration: `supabase/add_member_import_schema.sql`. Imports ~1,575 people from a legacy workbook into the existing `people` table and adds supporting tables.
+
+### New columns on people
+- `register_no integer` — Sl No from the workbook, for traceability; non-unique index
+- `country text`, `country_code text`, `language text`, `referred_by text` — demographic fields
+- `contact_via text` — name of the phone holder for family members who share a number
+- `alternate_phone text`
+- `person_type text NOT NULL default 'student'` — CHECK `('student','contact')`; `'contact'` = phone-holder row with no own participation record; existing rows default to `'student'`
+- `needs_review boolean NOT NULL default false`, `review_type text`, `review_note text`, `review_pair text` — flags rows needing admin attention; `review_pair` links two possibly-duplicate rows with a shared label (e.g. `'M12'`); partial index on `needs_review = true`
+- `community_status text` — CHECK `('not_invited','invited','joined','declined','cant_reach')`; Thapovanam Siddhashram WhatsApp community checklist
+- `community_invited_on date`
+
+### New tables (admin-only; faculty must never read them)
+All four tables have RLS ON with one admin-only ALL policy (inline role check). No faculty policies.
+
+- **whatsapp_groups** — master list of WhatsApp groups (`name` unique, `is_active`, `sort_order`). Seeded: Araiki first degree practitioners (10), Araiki Advanced practitioners (20), Araiki Lifetime practitioners (30), Jnana Sweekaranam (40).
+- **person_whatsapp_groups** — junction: `person_id → people` (CASCADE), `group_id → whatsapp_groups` (RESTRICT), `name_in_group text`. Unique on `(person_id, group_id)`.
+- **person_programmes** — which LMS/Araiki programmes the person participated in; `programme text NOT NULL` (free text, may be Malayalam), `source text` (e.g. `'LMS'` or `'Araiki'`), `detail text`. Unique on `(person_id, programme)`.
+- **araiki_history** — read-only import of legacy Araiki spreadsheet data; all date/status columns stored as text. Fields: `reg_no`, `enquiry_date`, `class_dates`, `first_degree_mode`, `practice_status`, `event_confirmation`, `current_level`, `follow_up_date`, `second_degree_mode`, `second_degree_remarks`, `found_in_tabs`. Unique on `person_id`.
+
 ## Do NOT
 - Build mobile layouts — laptop only
 - Use any paid external services
