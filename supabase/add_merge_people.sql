@@ -27,7 +27,7 @@ declare
 begin
 
   -- ── 0. Admin guard ──────────────────────────────────────────────────────────
-  if (select role from profiles where id = auth.uid()) != 'admin' then
+  if (select role from profiles where id = auth.uid()) is distinct from 'admin' then
     raise exception 'Permission denied';
   end if;
 
@@ -119,15 +119,17 @@ begin
           chief_complaints           = coalesce(chief_complaints,           v_remove_form.chief_complaints)
         where person_id = p_keep;
       end if;
-      -- Record the merged health data as a note
-      insert into student_notes (person_id, admin_id, note, created_at)
-      values (
-        p_keep,
-        auth.uid(),
-        'Merged record - health details: '
-          || coalesce(v_remove_form.current_conditions_details, ''),
-        now()
-      );
+      -- Record the merged health data as a note (only when there is something to record)
+      if v_remove_form.current_conditions_details is not null
+         and trim(v_remove_form.current_conditions_details) <> '' then
+        insert into student_notes (person_id, admin_id, note, created_at)
+        values (
+          p_keep,
+          auth.uid(),
+          'Merged record - health details: ' || v_remove_form.current_conditions_details,
+          now()
+        );
+      end if;
     end if;
   end if;
 
@@ -149,13 +151,15 @@ begin
       if v_remove_araiki.second_degree_mode   is not null then v_araiki_summary := v_araiki_summary || '2nd degree: '  || v_remove_araiki.second_degree_mode   || '; '; end if;
       if v_remove_araiki.second_degree_remarks is not null then v_araiki_summary := v_araiki_summary || 'remarks: '    || v_remove_araiki.second_degree_remarks || '; '; end if;
       if v_remove_araiki.found_in_tabs        is not null then v_araiki_summary := v_araiki_summary || 'tabs: '        || v_remove_araiki.found_in_tabs         || '; '; end if;
-      insert into student_notes (person_id, admin_id, note, created_at)
-      values (
-        p_keep,
-        auth.uid(),
-        'Merged record - Araiki history: ' || rtrim(v_araiki_summary, '; '),
-        now()
-      );
+      if v_araiki_summary <> '' then
+        insert into student_notes (person_id, admin_id, note, created_at)
+        values (
+          p_keep,
+          auth.uid(),
+          'Merged record - Araiki history: ' || rtrim(v_araiki_summary, '; '),
+          now()
+        );
+      end if;
     end if;
   end if;
 
