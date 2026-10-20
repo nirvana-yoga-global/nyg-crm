@@ -3,6 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { Search, Plus, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
+const CHUNK = 1000
+const PAGE  = 100
+
 // Must mirror normalize_phone() in supabase/add_people_table.sql exactly.
 function normalizePhone(raw) {
   if (!raw) return null
@@ -152,22 +155,54 @@ export default function People() {
   const [formIds, setFormIds] = useState(new Set())
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
-  const [filter, setFilter] = useState('all')
+  const [filter, setFilter] = useState('all')            // 'all' | 'connect' | 'no-app'
+  const [typeFilter, setTypeFilter] = useState('students') // 'all' | 'students' | 'contacts'
+  const [needsReview, setNeedsReview] = useState(false)
+  const [showCount, setShowCount] = useState(PAGE)
   const [showAddModal, setShowAddModal] = useState(false)
 
   const fetchPeople = useCallback(async () => {
-    const [{ data: ppl }, { data: forms }] = await Promise.all([
-      supabase.from('people').select('id, full_name, phone, phone_normalized, email, location, profile_id').order('full_name'),
-      supabase.from('intake_forms').select('person_id').not('person_id', 'is', null),
-    ])
-    setPeople(ppl || [])
+    setLoading(true)
+    // Start forms fetch in parallel with the first people page
+    const formsPromise = supabase
+      .from('intake_forms')
+      .select('person_id')
+      .not('person_id', 'is', null)
+
+    // Page through all people in chunks of 1000
+    const allPeople = []
+    let from = 0
+    while (true) {
+      const { data } = await supabase
+        .from('people')
+        .select('id, full_name, phone, phone_normalized, email, location, profile_id, person_type, needs_review, country, register_no')
+        .order('full_name')
+        .range(from, from + CHUNK - 1)
+      allPeople.push(...(data || []))
+      if (!data || data.length < CHUNK) break
+      from += CHUNK
+    }
+
+    const { data: forms } = await formsPromise
+    setPeople(allPeople)
     setFormIds(new Set((forms || []).map(f => f.person_id)))
     setLoading(false)
   }, [])
 
   useEffect(() => { fetchPeople() }, [fetchPeople])
 
+  // Reset visible row count whenever any filter/search changes
+  useEffect(() => { setShowCount(PAGE) }, [search, typeFilter, needsReview, filter])
+
+  // Counts for type pills (computed from full dataset)
+  const studentsCount = people.filter(p => p.person_type !== 'contact').length
+  const contactsCount = people.filter(p => p.person_type === 'contact').length
+  const reviewCount   = people.filter(p => p.needs_review).length
+
   const filtered = people.filter(p => {
+    if (typeFilter === 'students' && p.person_type === 'contact') return false
+    if (typeFilter === 'contacts' && p.person_type !== 'contact') return false
+    if (needsReview && !p.needs_review) return false
     if (filter === 'connect' && !p.profile_id) return false
     if (filter === 'no-app' && p.profile_id) return false
     const q = search.trim().toLowerCase()
@@ -182,6 +217,8 @@ export default function People() {
     return false
   })
 
+  const displayed = filtered.slice(0, showCount)
+
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-6">
@@ -195,7 +232,8 @@ export default function People() {
         </button>
       </div>
 
-      <div className="flex items-center gap-3 mb-4">
+      {/* Row 1: search + Connect/No-app filter */}
+      <div className="flex items-center gap-3 mb-3">
         <div className="relative flex-1 max-w-sm">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
@@ -228,58 +266,112 @@ export default function People() {
         </div>
       </div>
 
+      {/* Row 2: type filter + needs-review pill */}
+      <div className="flex items-center gap-1.5 mb-4">
+        {[
+          ['all',      `All (${people.length})`],
+          ['students', `Students (${studentsCount})`],
+          ['contacts', `Contacts (${contactsCount})`],
+        ].map(([val, label]) => (
+          <button
+            key={val}
+            onClick={() => setTypeFilter(val)}
+            className={`px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${
+              typeFilter === val ? 'bg-[#1742b5] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+        <button
+          onClick={() => setNeedsReview(r => !r)}
+          className={`ml-2 px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${
+            needsReview
+              ? 'bg-amber-500 text-white'
+              : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+          }`}
+        >
+          Needs review ({reviewCount})
+        </button>
+      </div>
+
       {loading ? (
         <div className="py-16 text-center text-gray-400 text-sm">Loading…</div>
       ) : (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          {filtered.length === 0 ? (
-            <div className="py-16 text-center text-gray-400 text-sm">No students found.</div>
-          ) : (
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-gray-100">
-                  <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-6 py-3">Name</th>
-                  <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-4 py-3">Phone</th>
-                  <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-4 py-3">Email</th>
-                  <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-4 py-3">Location</th>
-                  <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-4 py-3"></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map(p => (
-                  <tr
-                    key={p.id}
-                    onClick={() => navigate(`/people/${p.id}`)}
-                    className="border-b border-gray-50 last:border-0 hover:bg-gray-50 cursor-pointer transition-colors"
-                  >
-                    <td className="px-6 py-4">
-                      <span className="text-sm font-medium text-gray-900">{p.full_name}</span>
-                    </td>
-                    <td className="px-4 py-4">
-                      <span className="text-sm text-gray-600">{p.phone || '—'}</span>
-                    </td>
-                    <td className="px-4 py-4">
-                      <span className="text-sm text-gray-600">{p.email || '—'}</span>
-                    </td>
-                    <td className="px-4 py-4">
-                      <span className="text-sm text-gray-500">{p.location || '—'}</span>
-                    </td>
-                    <td className="px-4 py-4">
-                      <div className="flex gap-1.5">
-                        {p.profile_id && (
-                          <span className="text-xs font-medium bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">Connect</span>
-                        )}
-                        {formIds.has(p.id) && (
-                          <span className="text-xs font-medium bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Form</span>
-                        )}
-                      </div>
-                    </td>
+        <>
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+            {displayed.length === 0 ? (
+              <div className="py-16 text-center text-gray-400 text-sm">No students found.</div>
+            ) : (
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-gray-100">
+                    <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-6 py-3">Name</th>
+                    <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-4 py-3">Phone</th>
+                    <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-4 py-3">Email</th>
+                    <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-4 py-3">Location</th>
+                    <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-4 py-3"></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {displayed.map(p => (
+                    <tr
+                      key={p.id}
+                      onClick={() => navigate(`/people/${p.id}`)}
+                      className="border-b border-gray-50 last:border-0 hover:bg-gray-50 cursor-pointer transition-colors"
+                    >
+                      <td className="px-6 py-4">
+                        <span className="text-sm font-medium text-gray-900">{p.full_name}</span>
+                      </td>
+                      <td className="px-4 py-4">
+                        <span className="text-sm text-gray-600">{p.phone || '—'}</span>
+                      </td>
+                      <td className="px-4 py-4">
+                        <span className="text-sm text-gray-600">{p.email || '—'}</span>
+                      </td>
+                      <td className="px-4 py-4">
+                        <span className="text-sm text-gray-500">{p.location || '—'}</span>
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="flex gap-1.5 flex-wrap">
+                          {p.needs_review && (
+                            <span className="text-xs font-medium bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">Needs review</span>
+                          )}
+                          {p.person_type === 'contact' && (
+                            <span className="text-xs font-medium bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">Contact</span>
+                          )}
+                          {p.profile_id && (
+                            <span className="text-xs font-medium bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">Connect</span>
+                          )}
+                          {formIds.has(p.id) && (
+                            <span className="text-xs font-medium bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Form</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          {filtered.length > showCount && (
+            <div className="mt-4 text-center">
+              <button
+                onClick={() => setShowCount(c => c + PAGE)}
+                className="px-6 py-2 text-sm font-medium text-[#1742b5] border border-[#1742b5]/30 rounded-lg hover:bg-[#1742b5]/5 transition-colors"
+              >
+                Show more ({filtered.length - showCount} remaining)
+              </button>
+            </div>
           )}
-        </div>
+
+          {filtered.length > 0 && (
+            <p className="mt-3 text-center text-xs text-gray-400">
+              Showing {Math.min(showCount, filtered.length)} of {filtered.length}
+            </p>
+          )}
+        </>
       )}
 
       {showAddModal && (
