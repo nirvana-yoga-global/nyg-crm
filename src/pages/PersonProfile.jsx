@@ -54,6 +54,179 @@ const ARAIKI_FIELDS = [
   ['found_in_tabs',         'Found in tabs'],
 ]
 
+// ── WhatsApp groups card (self-contained) ─────────────────────────────────────
+function WhatsAppGroupsCard({ personId }) {
+  const [memberships, setMemberships] = useState([])
+  const [allGroups, setAllGroups]     = useState([])
+  const [cardLoading, setCardLoading] = useState(true)
+  const [cardError, setCardError]     = useState('')
+  const [confirmRemove, setConfirmRemove] = useState(null) // { entryId, groupName }
+  const [removing, setRemoving]       = useState(false)
+  const [addGroupId, setAddGroupId]   = useState('')
+  const [addNameInGroup, setAddNameInGroup] = useState('')
+  const [adding, setAdding]           = useState(false)
+  const [addError, setAddError]       = useState('')
+
+  async function load() {
+    setCardLoading(true)
+    setCardError('')
+    const [membRes, grpRes] = await Promise.all([
+      supabase
+        .from('person_whatsapp_groups')
+        .select('id, name_in_group, group_id, whatsapp_groups(id, name)')
+        .eq('person_id', personId)
+        .order('created_at'),
+      supabase
+        .from('whatsapp_groups')
+        .select('id, name, sort_order')
+        .eq('is_active', true)
+        .order('sort_order'),
+    ])
+    if (membRes.error) { setCardError(membRes.error.message); setCardLoading(false); return }
+    if (grpRes.error)  { setCardError(grpRes.error.message);  setCardLoading(false); return }
+    setMemberships(membRes.data || [])
+    setAllGroups(grpRes.data || [])
+    setCardLoading(false)
+  }
+
+  useEffect(() => { load() }, [personId])
+
+  const joinedGroupIds  = new Set(memberships.map(m => m.group_id))
+  const availableGroups = allGroups.filter(g => !joinedGroupIds.has(g.id))
+
+  async function handleRemove() {
+    if (!confirmRemove) return
+    setRemoving(true)
+    const { error: err } = await supabase
+      .from('person_whatsapp_groups')
+      .delete()
+      .eq('id', confirmRemove.entryId)
+    if (err) { setCardError(err.message); setRemoving(false); return }
+    setConfirmRemove(null)
+    setRemoving(false)
+    await load()
+  }
+
+  async function handleAdd() {
+    if (!addGroupId) { setAddError('Select a group.'); return }
+    setAdding(true)
+    setAddError('')
+    const { error: err } = await supabase.from('person_whatsapp_groups').insert({
+      person_id:     personId,
+      group_id:      addGroupId,
+      name_in_group: addNameInGroup.trim() || null,
+    })
+    if (err) {
+      setAddError(err.code === '23505' ? 'Already in this group.' : err.message)
+      setAdding(false)
+      return
+    }
+    setAddGroupId('')
+    setAddNameInGroup('')
+    setAdding(false)
+    await load()
+  }
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-6">
+      <h3 className="text-sm font-semibold text-gray-800 mb-4">WhatsApp groups</h3>
+
+      {cardLoading ? (
+        <p className="text-sm text-gray-400">Loading…</p>
+      ) : (
+        <>
+          {cardError && <p className="text-sm text-red-600 mb-3">{cardError}</p>}
+
+          {memberships.length === 0 ? (
+            <p className="text-sm text-gray-400 mb-4">Not in any WhatsApp groups.</p>
+          ) : (
+            <ul className="space-y-2.5 mb-5">
+              {memberships.map(entry => {
+                const isConfirming = confirmRemove?.entryId === entry.id
+                const grpName = entry.whatsapp_groups?.name || '—'
+                return (
+                  <li key={entry.id} className="flex items-center justify-between gap-3">
+                    <div className="flex items-baseline gap-2 min-w-0">
+                      <span className="text-sm text-gray-800">{grpName}</span>
+                      {entry.name_in_group && (
+                        <span className="text-xs text-gray-400 truncate">
+                          saved as: {entry.name_in_group}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0 text-xs">
+                      {isConfirming ? (
+                        <>
+                          <span className="text-gray-600">Remove from {grpName}?</span>
+                          <button
+                            onClick={handleRemove}
+                            disabled={removing}
+                            className="font-medium text-red-600 hover:text-red-800 disabled:opacity-50"
+                          >
+                            {removing ? 'Removing…' : 'Yes, remove'}
+                          </button>
+                          <button
+                            onClick={() => setConfirmRemove(null)}
+                            className="text-gray-400 hover:text-gray-600"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          onClick={() => setConfirmRemove({ entryId: entry.id, groupName: grpName })}
+                          className="text-gray-400 hover:text-red-600 transition-colors"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+
+          {/* Add to group */}
+          {availableGroups.length > 0 && (
+            <div className="border-t border-gray-100 pt-4 space-y-2.5">
+              <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">
+                Add to group
+              </p>
+              <select
+                value={addGroupId}
+                onChange={e => { setAddGroupId(e.target.value); setAddError('') }}
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#1742b5]/20 focus:border-[#1742b5]"
+              >
+                <option value="">Select a group…</option>
+                {availableGroups.map(g => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+              <input
+                value={addNameInGroup}
+                onChange={e => setAddNameInGroup(e.target.value)}
+                placeholder="Name shown in the group (optional)"
+                className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#1742b5]/20 focus:border-[#1742b5]"
+              />
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleAdd}
+                  disabled={adding || !addGroupId}
+                  className="px-4 py-2 text-sm font-medium bg-[#1742b5] text-white rounded-lg hover:bg-[#1330a0] disabled:opacity-50 transition-colors"
+                >
+                  {adding ? 'Adding…' : 'Add'}
+                </button>
+                {addError && <span className="text-sm text-red-600">{addError}</span>}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
 // ── Details tab ───────────────────────────────────────────────────────────────
 function DetailsTab({ person, setPerson, programmes, whatsappGroups, araikiHistory, importDataError }) {
   const navigate = useNavigate()
@@ -313,23 +486,7 @@ function DetailsTab({ person, setPerson, programmes, whatsappGroups, araikiHisto
       </div>
 
       {/* WhatsApp groups card */}
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
-        <h3 className="text-sm font-semibold text-gray-800 mb-4">WhatsApp groups</h3>
-        {whatsappGroups.length === 0 ? (
-          <p className="text-sm text-gray-400">Not in any WhatsApp groups.</p>
-        ) : (
-          <ul className="space-y-2">
-            {whatsappGroups.map(entry => (
-              <li key={entry.id} className="flex items-baseline gap-2">
-                <span className="text-sm text-gray-800">{entry.whatsapp_groups?.name || '—'}</span>
-                {entry.name_in_group && (
-                  <span className="text-xs text-gray-400">saved as: {entry.name_in_group}</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      <WhatsAppGroupsCard personId={person.id} />
 
       {/* Araiki history card (only if row exists) */}
       {araikiRows.length > 0 && (
