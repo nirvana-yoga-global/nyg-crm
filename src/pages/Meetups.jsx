@@ -67,6 +67,7 @@ export default function Meetups() {
   const [savingNewAtt, setSavingNewAtt] = useState(false)
   const [removeAttId, setRemoveAttId] = useState(null)
   const [removingAtt, setRemovingAtt] = useState(false)
+  const [attError, setAttError] = useState('')
   const [copied, setCopied] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -121,6 +122,7 @@ export default function Meetups() {
     setNewAttPhone('')
     setAttPhoneDupResults([])
     setRemoveAttId(null)
+    setAttError('')
   }, [selectedMeetup?.id])
 
   useEffect(() => {
@@ -328,18 +330,26 @@ export default function Meetups() {
   }
 
   async function markAttendance(person) {
-    if (attMarkingId) return
+    if (attMarkingId) return false
     setAttMarkingId(person.id)
-    const payload = {
-      meetup_id: selectedMeetup.id,
-      person_id: person.id,
-      name: person.full_name,
-      phone: person.phone || null,
-      is_student: person.person_type === 'student' || !!person.profile_id,
-      student_profile_id: person.profile_id || null,
-    }
-    const { data, error } = await supabase.from('meetup_attendance').insert(payload).select().single()
-    if (!error && data) {
+    setAttError('')
+    try {
+      const payload = {
+        meetup_id: selectedMeetup.id,
+        person_id: person.id,
+        name: person.full_name,
+        phone: person.phone || null,
+        is_student: person.person_type === 'student' || !!person.profile_id,
+        student_profile_id: person.profile_id || null,
+      }
+      const { data, error } = await supabase.from('meetup_attendance').insert(payload).select().single()
+      if (error) {
+        console.error('markAttendance insert error:', error)
+        setAttError(error.code === '23505'
+          ? 'Already marked for this meetup.'
+          : `${error.message} (${error.code})`)
+        return false
+      }
       setAttendance(prev => [data, ...prev])
       setAttSearch('')
       setAttResults([])
@@ -350,8 +360,10 @@ export default function Meetups() {
           ? { ...m, meetup_attendance: [{ count: (m.meetup_attendance?.[0]?.count ?? 0) + 1 }] }
           : m
       ))
+      return true
+    } finally {
+      setAttMarkingId(null)
     }
-    setAttMarkingId(null)
   }
 
   function handleAttPhoneChange(phone) {
@@ -376,32 +388,44 @@ export default function Meetups() {
   async function handleAddNewAtt() {
     if (!newAttName.trim() || savingNewAtt) return
     setSavingNewAtt(true)
-    const { data: person, error } = await supabase
+    setAttError('')
+    const { data: person, error: pErr } = await supabase
       .from('people')
       .insert({ full_name: newAttName.trim(), phone: newAttPhone.trim() || null })
       .select('id, full_name, phone, person_type, profile_id')
       .single()
-    if (!error && person) {
-      await markAttendance(person)
+    if (pErr) {
+      console.error('handleAddNewAtt people insert error:', pErr)
+      setAttError(`${pErr.message} (${pErr.code})`)
+      setSavingNewAtt(false)
+      return
     }
-    setNewAttName('')
-    setNewAttPhone('')
-    setAttPhoneDupResults([])
+    const ok = await markAttendance(person)
+    if (ok) {
+      setNewAttName('')
+      setNewAttPhone('')
+      setAttPhoneDupResults([])
+    }
     setSavingNewAtt(false)
   }
 
   async function removeAttendee() {
     setRemovingAtt(true)
+    setAttError('')
     const { error } = await supabase.from('meetup_attendance').delete().eq('id', removeAttId)
-    if (!error) {
-      setAttendance(prev => prev.filter(a => a.id !== removeAttId))
-      setRemoveAttId(null)
-      setMeetups(prev => prev.map(m =>
-        m.id === selectedMeetup.id
-          ? { ...m, meetup_attendance: [{ count: Math.max(0, (m.meetup_attendance?.[0]?.count ?? 0) - 1) }] }
-          : m
-      ))
+    if (error) {
+      console.error('removeAttendee error:', error)
+      setAttError(`${error.message} (${error.code})`)
+      setRemovingAtt(false)
+      return
     }
+    setAttendance(prev => prev.filter(a => a.id !== removeAttId))
+    setRemoveAttId(null)
+    setMeetups(prev => prev.map(m =>
+      m.id === selectedMeetup.id
+        ? { ...m, meetup_attendance: [{ count: Math.max(0, (m.meetup_attendance?.[0]?.count ?? 0) - 1) }] }
+        : m
+    ))
     setRemovingAtt(false)
   }
 
@@ -875,6 +899,15 @@ export default function Meetups() {
                 <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
                   Attendance · {attendance.length}
                 </p>
+
+                {attError && (
+                  <div className="mb-3 flex items-start gap-2 bg-red-50 border border-red-100 rounded-lg px-3 py-2.5">
+                    <span className="text-xs text-red-600 flex-1">{attError}</span>
+                    <button onClick={() => setAttError('')} className="text-red-400 hover:text-red-600 flex-shrink-0 mt-px">
+                      <X size={13} />
+                    </button>
+                  </div>
+                )}
 
                 {/* Person search for attendance */}
                 <div className="relative mb-4" ref={attDropdownRef}>
