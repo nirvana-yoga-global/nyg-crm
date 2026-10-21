@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
+import { Link } from 'react-router-dom'
 import { Plus, X, MapPin, Star, Copy, Check, Trash2, Wifi, Users, Search, UserPlus } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useCourses } from '../hooks/useCourses'
+import { normalizePhone } from '../lib/normalizePhone'
 
 function generateEventCode() {
   return 'NYG' + Math.random().toString(36).substring(2, 7).toUpperCase()
@@ -42,7 +44,6 @@ const LEAD_STATUS_STYLE = {
 }
 
 const EMPTY_MEETUP = { title: '', date: '', type: 'offline', location: '', description: '', event_code: '', xp_reward: 50, language: '', course: '' }
-const EMPTY_ATTENDEE = { name: '', phone: '', is_student: false, student_profile_id: '' }
 
 export default function Meetups() {
   const [meetups, setMeetups] = useState([])
@@ -53,9 +54,19 @@ export default function Meetups() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [newMeetup, setNewMeetup] = useState({ ...EMPTY_MEETUP, event_code: generateEventCode() })
   const [saving, setSaving] = useState(false)
-  const [newAttendee, setNewAttendee] = useState(EMPTY_ATTENDEE)
-  const [savingAttendee, setSavingAttendee] = useState(false)
-  const [students, setStudents] = useState([])
+  const [attSearch, setAttSearch] = useState('')
+  const [attSearchLoading, setAttSearchLoading] = useState(false)
+  const [attResults, setAttResults] = useState([])
+  const [attShowDropdown, setAttShowDropdown] = useState(false)
+  const [attMarkingId, setAttMarkingId] = useState(null)
+  const [showNewAttForm, setShowNewAttForm] = useState(false)
+  const [newAttName, setNewAttName] = useState('')
+  const [newAttPhone, setNewAttPhone] = useState('')
+  const [attPhoneDupLoading, setAttPhoneDupLoading] = useState(false)
+  const [attPhoneDupResults, setAttPhoneDupResults] = useState([])
+  const [savingNewAtt, setSavingNewAtt] = useState(false)
+  const [removeAttId, setRemoveAttId] = useState(null)
+  const [removingAtt, setRemovingAtt] = useState(false)
   const [copied, setCopied] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -81,6 +92,9 @@ export default function Meetups() {
   const [savingNewPerson, setSavingNewPerson] = useState(false)
 
   const regDropdownRef = useRef(null)
+  const attDropdownRef = useRef(null)
+  const attSearchTimer = useRef(null)
+  const attPhoneTimer = useRef(null)
   const leadCourses = useCourses()
 
   useEffect(() => { fetchMeetups() }, [])
@@ -99,12 +113,15 @@ export default function Meetups() {
     setShowNewPersonForm(false)
     setNewPerson({ name: '', phone: '' })
     setRemoveRegId(null)
+    setAttSearch('')
+    setAttResults([])
+    setAttShowDropdown(false)
+    setShowNewAttForm(false)
+    setNewAttName('')
+    setNewAttPhone('')
+    setAttPhoneDupResults([])
+    setRemoveAttId(null)
   }, [selectedMeetup?.id])
-
-  useEffect(() => {
-    supabase.from('students').select('profile_id, name').order('name')
-      .then(({ data }) => setStudents(data || []))
-  }, [])
 
   useEffect(() => {
     function handleClickOutside(e) {
@@ -112,6 +129,10 @@ export default function Meetups() {
         setShowRegDropdown(false)
         setShowNewPersonForm(false)
         setNewPerson({ name: '', phone: '' })
+      }
+      if (attDropdownRef.current && !attDropdownRef.current.contains(e.target)) {
+        setAttShowDropdown(false)
+        setShowNewAttForm(false)
       }
     }
     document.addEventListener('mousedown', handleClickOutside)
@@ -279,28 +300,109 @@ export default function Meetups() {
     setSaving(false)
   }
 
-  async function handleAddAttendee(e) {
-    e.preventDefault()
-    if (!newAttendee.name.trim()) return
-    setSavingAttendee(true)
+  function handleAttSearchChange(text) {
+    setAttSearch(text)
+    setAttShowDropdown(true)
+    clearTimeout(attSearchTimer.current)
+    if (!text.trim()) {
+      setAttResults([])
+      setAttSearchLoading(false)
+      return
+    }
+    setAttSearchLoading(true)
+    attSearchTimer.current = setTimeout(() => searchPeopleForAtt(text), 250)
+  }
+
+  async function searchPeopleForAtt(text) {
+    const digits = text.replace(/\D/g, '')
+    const filter = digits
+      ? `full_name.ilike.%${text}%,phone_normalized.ilike.%${digits}%`
+      : `full_name.ilike.%${text}%`
+    const { data } = await supabase
+      .from('people')
+      .select('id, full_name, phone, phone_normalized, person_type, profile_id')
+      .or(filter)
+      .limit(8)
+    setAttResults(data || [])
+    setAttSearchLoading(false)
+  }
+
+  async function markAttendance(person) {
+    if (attMarkingId) return
+    setAttMarkingId(person.id)
     const payload = {
       meetup_id: selectedMeetup.id,
-      name: newAttendee.name.trim(),
-      phone: newAttendee.phone.trim() || null,
-      is_student: newAttendee.is_student,
-      student_profile_id: newAttendee.is_student && newAttendee.student_profile_id ? newAttendee.student_profile_id : null,
+      person_id: person.id,
+      name: person.full_name,
+      phone: person.phone || null,
+      is_student: person.person_type === 'student' || !!person.profile_id,
+      student_profile_id: person.profile_id || null,
     }
     const { data, error } = await supabase.from('meetup_attendance').insert(payload).select().single()
     if (!error && data) {
       setAttendance(prev => [data, ...prev])
-      setNewAttendee(EMPTY_ATTENDEE)
+      setAttSearch('')
+      setAttResults([])
+      setAttShowDropdown(false)
+      setShowNewAttForm(false)
       setMeetups(prev => prev.map(m =>
         m.id === selectedMeetup.id
           ? { ...m, meetup_attendance: [{ count: (m.meetup_attendance?.[0]?.count ?? 0) + 1 }] }
           : m
       ))
     }
-    setSavingAttendee(false)
+    setAttMarkingId(null)
+  }
+
+  function handleAttPhoneChange(phone) {
+    setNewAttPhone(phone)
+    clearTimeout(attPhoneTimer.current)
+    setAttPhoneDupResults([])
+    if (!phone.trim()) { setAttPhoneDupLoading(false); return }
+    setAttPhoneDupLoading(true)
+    attPhoneTimer.current = setTimeout(async () => {
+      const norm = normalizePhone(phone)
+      if (!norm) { setAttPhoneDupLoading(false); return }
+      const { data } = await supabase
+        .from('people')
+        .select('id, full_name, phone')
+        .eq('phone_normalized', norm)
+        .limit(5)
+      setAttPhoneDupResults(data || [])
+      setAttPhoneDupLoading(false)
+    }, 300)
+  }
+
+  async function handleAddNewAtt() {
+    if (!newAttName.trim() || savingNewAtt) return
+    setSavingNewAtt(true)
+    const { data: person, error } = await supabase
+      .from('people')
+      .insert({ full_name: newAttName.trim(), phone: newAttPhone.trim() || null })
+      .select('id, full_name, phone, person_type, profile_id')
+      .single()
+    if (!error && person) {
+      await markAttendance(person)
+    }
+    setNewAttName('')
+    setNewAttPhone('')
+    setAttPhoneDupResults([])
+    setSavingNewAtt(false)
+  }
+
+  async function removeAttendee() {
+    setRemovingAtt(true)
+    const { error } = await supabase.from('meetup_attendance').delete().eq('id', removeAttId)
+    if (!error) {
+      setAttendance(prev => prev.filter(a => a.id !== removeAttId))
+      setRemoveAttId(null)
+      setMeetups(prev => prev.map(m =>
+        m.id === selectedMeetup.id
+          ? { ...m, meetup_attendance: [{ count: Math.max(0, (m.meetup_attendance?.[0]?.count ?? 0) - 1) }] }
+          : m
+      ))
+    }
+    setRemovingAtt(false)
   }
 
   async function handleDeleteMeetup() {
@@ -356,6 +458,8 @@ export default function Meetups() {
   const filteredAraikiLeads = araikiCourseFilter
     ? araikiLeads.filter(l => l.course_interested === araikiCourseFilter)
     : araikiLeads
+
+  const markedPersonIds = new Set(attendance.filter(a => a.person_id).map(a => a.person_id))
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">
@@ -772,50 +876,112 @@ export default function Meetups() {
                   Attendance · {attendance.length}
                 </p>
 
-                {/* Add attendee form */}
-                <form onSubmit={handleAddAttendee} className="bg-gray-50 rounded-xl p-3 mb-4 space-y-2">
-                  <p className="text-xs font-medium text-gray-500">Mark Attendance</p>
-                  <input
-                    value={newAttendee.name}
-                    onChange={e => setNewAttendee(p => ({ ...p, name: e.target.value }))}
-                    placeholder="Full name *"
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-[#1742b5]"
-                  />
-                  <input
-                    value={newAttendee.phone}
-                    onChange={e => setNewAttendee(p => ({ ...p, phone: e.target.value }))}
-                    placeholder="Phone (optional)"
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-[#1742b5]"
-                  />
-                  <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                {/* Person search for attendance */}
+                <div className="relative mb-4" ref={attDropdownRef}>
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                     <input
-                      type="checkbox"
-                      checked={newAttendee.is_student}
-                      onChange={e => setNewAttendee(p => ({ ...p, is_student: e.target.checked, student_profile_id: '' }))}
-                      className="rounded border-gray-300"
+                      value={attSearch}
+                      onChange={e => handleAttSearchChange(e.target.value)}
+                      onFocus={() => setAttShowDropdown(true)}
+                      placeholder="Search name or phone…"
+                      className="w-full border border-gray-200 rounded-lg pl-8 pr-8 py-2 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-[#1742b5] focus:border-transparent"
                     />
-                    Existing student
-                  </label>
-                  {newAttendee.is_student && (
-                    <select
-                      value={newAttendee.student_profile_id}
-                      onChange={e => {
-                        const s = students.find(s => s.profile_id === e.target.value)
-                        setNewAttendee(p => ({ ...p, student_profile_id: e.target.value, name: s?.name || p.name }))
-                      }}
-                      className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-[#1742b5]"
-                    >
-                      <option value="">Select student…</option>
-                      {students.map(s => (
-                        <option key={s.profile_id} value={s.profile_id}>{s.name}</option>
-                      ))}
-                    </select>
+                    {attSearch && (
+                      <button onClick={() => { setAttSearch(''); setAttResults([]); setAttShowDropdown(false); setShowNewAttForm(false) }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
+
+                  {attShowDropdown && (attSearch.trim() || showNewAttForm) && (
+                    <div className="absolute z-10 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg overflow-hidden">
+                      {showNewAttForm ? (
+                        <div className="p-3 space-y-2">
+                          <p className="text-xs font-semibold text-gray-500">New person</p>
+                          <input
+                            value={newAttName}
+                            onChange={e => setNewAttName(e.target.value)}
+                            placeholder="Full name *"
+                            autoFocus
+                            className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-[#1742b5]"
+                          />
+                          <input
+                            value={newAttPhone}
+                            onChange={e => handleAttPhoneChange(e.target.value)}
+                            placeholder="Phone (optional)"
+                            className="w-full border border-gray-200 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-[#1742b5]"
+                          />
+                          {attPhoneDupLoading && <p className="text-xs text-gray-400">Checking…</p>}
+                          {attPhoneDupResults.length > 0 && (
+                            <div className="border border-amber-100 bg-amber-50 rounded-lg p-2 space-y-1">
+                              <p className="text-xs text-amber-700 font-medium">Same phone already exists:</p>
+                              {attPhoneDupResults.map(p => (
+                                <button key={p.id}
+                                  onClick={() => { markAttendance(p); setShowNewAttForm(false); setNewAttName(''); setNewAttPhone(''); setAttPhoneDupResults([]) }}
+                                  className="w-full text-left px-2 py-1 text-sm text-[#1742b5] font-medium hover:bg-amber-100 rounded">
+                                  Use {p.full_name}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          <div className="flex gap-2">
+                            <button type="button"
+                              onClick={() => { setShowNewAttForm(false); setNewAttName(''); setNewAttPhone(''); setAttPhoneDupResults([]) }}
+                              className="flex-1 border border-gray-200 text-gray-500 py-1.5 rounded-lg text-xs hover:bg-gray-50">
+                              Cancel
+                            </button>
+                            <button type="button" onClick={handleAddNewAtt} disabled={!newAttName.trim() || savingNewAtt}
+                              className="flex-1 bg-[#1742b5] text-white py-1.5 rounded-lg text-xs font-semibold hover:bg-[#1338a0] disabled:opacity-50">
+                              {savingNewAtt ? 'Adding…' : 'Add anyway'}
+                            </button>
+                          </div>
+                        </div>
+                      ) : attSearchLoading ? (
+                        <div className="py-4 text-center text-xs text-gray-400">Searching…</div>
+                      ) : (
+                        <>
+                          {attResults.length > 0 ? (
+                            <div className="max-h-52 overflow-y-auto">
+                              {attResults.map(p => {
+                                const already = markedPersonIds.has(p.id)
+                                const isStudent = p.person_type === 'student' || !!p.profile_id
+                                return (
+                                  <button key={p.id} onClick={() => !already && markAttendance(p)}
+                                    disabled={already || !!attMarkingId}
+                                    className={`w-full text-left px-3 py-2.5 flex items-center gap-3 border-b border-gray-50 last:border-0 ${already ? 'opacity-50 cursor-default' : 'hover:bg-gray-50'}`}>
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-sm font-medium text-gray-900 truncate">{p.full_name}</p>
+                                      {p.phone && <p className="text-xs text-gray-400">{p.phone}</p>}
+                                    </div>
+                                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                                      {already ? (
+                                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-green-50 text-green-600">Marked</span>
+                                      ) : isStudent ? (
+                                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700">Student</span>
+                                      ) : (
+                                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">Contact</span>
+                                      )}
+                                      {attMarkingId === p.id && <span className="text-[10px] text-gray-400">Adding…</span>}
+                                    </div>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          ) : (
+                            <div className="py-3 text-center text-xs text-gray-400">No results</div>
+                          )}
+                          <button onClick={() => setShowNewAttForm(true)}
+                            className="w-full flex items-center gap-2 px-3 py-2.5 text-sm font-medium text-[#1742b5] hover:bg-blue-50 border-t border-gray-100">
+                            <UserPlus size={14} />
+                            Not in the list? Add new person
+                          </button>
+                        </>
+                      )}
+                    </div>
                   )}
-                  <button type="submit" disabled={savingAttendee || !newAttendee.name.trim()}
-                    className="w-full bg-[#1742b5] text-white py-1.5 rounded-lg text-xs font-semibold hover:bg-[#1338a0] transition-colors disabled:opacity-50">
-                    {savingAttendee ? 'Adding…' : 'Mark as Attended'}
-                  </button>
-                </form>
+                </div>
 
                 {/* Attendance list */}
                 {loadingAttendance ? (
@@ -825,18 +991,47 @@ export default function Meetups() {
                 ) : (
                   <div className="space-y-2">
                     {attendance.map(a => (
-                      <div key={a.id} className="flex items-center gap-3 bg-white border border-gray-100 rounded-xl px-3 py-2.5">
-                        <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${a.is_student ? 'bg-[#1742b5]/10 text-[#1742b5]' : 'bg-gray-100 text-gray-500'}`}>
-                          {a.name.charAt(0).toUpperCase()}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-900 truncate">{a.name}</p>
-                          {a.phone && <p className="text-xs text-gray-400">{a.phone}</p>}
-                        </div>
-                        {a.is_student && (
-                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700 flex-shrink-0">
-                            Student
-                          </span>
+                      <div key={a.id} className="bg-white border border-gray-100 rounded-xl px-3 py-2.5">
+                        {removeAttId === a.id ? (
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs text-gray-600">Remove <strong>{a.name}</strong>?</p>
+                            <div className="flex items-center gap-3">
+                              <button onClick={() => setRemoveAttId(null)} className="text-xs text-gray-400 hover:text-gray-600">No</button>
+                              <button onClick={removeAttendee} disabled={removingAtt}
+                                className="text-xs font-semibold text-red-600 hover:text-red-700 disabled:opacity-50">
+                                {removingAtt ? '…' : 'Yes, remove'}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-3">
+                            <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${a.is_student ? 'bg-[#1742b5]/10 text-[#1742b5]' : 'bg-gray-100 text-gray-500'}`}>
+                              {a.name.charAt(0).toUpperCase()}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              {a.person_id ? (
+                                <Link to={`/people/${a.person_id}`} className="text-sm font-medium text-[#1742b5] hover:underline truncate block">{a.name}</Link>
+                              ) : (
+                                <p className="text-sm font-medium text-gray-900 truncate">{a.name}</p>
+                              )}
+                              {a.phone && <p className="text-xs text-gray-400">{a.phone}</p>}
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-shrink-0">
+                              {a.person_id ? (
+                                a.is_student ? (
+                                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-700">Student</span>
+                                ) : (
+                                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">Contact</span>
+                                )
+                              ) : (
+                                <span className="text-[10px] text-gray-300 italic">Not linked</span>
+                              )}
+                              <button onClick={() => setRemoveAttId(a.id)}
+                                className="p-1 text-gray-300 hover:text-red-400 hover:bg-red-50 rounded-lg transition-colors">
+                                <X size={13} />
+                              </button>
+                            </div>
+                          </div>
                         )}
                       </div>
                     ))}
