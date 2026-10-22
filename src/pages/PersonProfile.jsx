@@ -7,6 +7,23 @@ function fmtDate(s) {
   const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
   return `${parseInt(d, 10)} ${MONTHS[parseInt(m, 10) - 1]} ${y}`
 }
+
+function fmtDateIST(ts) {
+  if (!ts) return ''
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    day: 'numeric', month: 'short', year: 'numeric',
+  }).format(new Date(ts))
+}
+
+function fmtDateTimeIST(ts) {
+  if (!ts) return ''
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    day: 'numeric', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  }).format(new Date(ts))
+}
 import { ChevronLeft } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import IntakeFormTab from '../components/IntakeFormTab'
@@ -926,6 +943,14 @@ export default function PersonProfile() {
                 <span className="text-xs font-medium bg-blue-100 text-blue-700 px-2.5 py-0.5 rounded-full">Connect</span>
               )}
             </div>
+            {person.updated_at && (
+              <p
+                className="text-xs text-gray-400 mt-1.5"
+                title={fmtDateTimeIST(person.updated_at)}
+              >
+                Profile updated on {fmtDateIST(person.updated_at)}
+              </p>
+            )}
           </div>
         </div>
       </div>

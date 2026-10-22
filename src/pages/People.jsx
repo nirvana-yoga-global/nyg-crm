@@ -38,6 +38,47 @@ function chunks(arr, size) {
   return result
 }
 
+// Returns { label, title } for a people.updated_at timestamptz string, using IST.
+// label: "Updated today" / "Updated yesterday" / "Updated N days ago" (≤6) / "Updated 4 Jul 2026"
+// title: full IST datetime for hover
+function relativeUpdated(ts) {
+  if (!ts) return null
+  const tsDate = new Date(ts)
+  const now    = new Date()
+
+  // YYYY-MM-DD in IST for both dates
+  const istFmt = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+  })
+  const todayIST = istFmt.format(now)
+  const tsIST    = istFmt.format(tsDate)
+
+  const [ty, tm, td] = todayIST.split('-').map(Number)
+  const [py, pm, pd] = tsIST.split('-').map(Number)
+  const diffDays = Math.round(
+    (Date.UTC(ty, tm - 1, td) - Date.UTC(py, pm - 1, pd)) / 86400000
+  )
+
+  const shortFmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    day: 'numeric', month: 'short', year: 'numeric',
+  })
+  const longFmt = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    day: 'numeric', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  })
+
+  let label
+  if (diffDays === 0)      label = 'Updated today'
+  else if (diffDays === 1) label = 'Updated yesterday'
+  else if (diffDays <= 6)  label = `Updated ${diffDays} days ago`
+  else                     label = `Updated ${shortFmt.format(tsDate)}`
+
+  return { label, title: longFmt.format(tsDate) }
+}
+
 function AddPersonModal({ onClose, onSaved, existingPeople }) {
   const [form, setForm] = useState({ full_name: '', phone: '', email: '', location: '', notes: '' })
   const [saving, setSaving] = useState(false)
@@ -195,6 +236,8 @@ export default function People() {
   // community filter: '' | '__not_invited__' | 'invited' | 'joined' | 'declined'
   const [communityFilter, setCommunityFilter] = useState('')
   const [countryFilter, setCountryFilter] = useState('')            // '' | '__none__' | country name
+  const [updatedFilter, setUpdatedFilter] = useState('')            // '' | '7d' | '30d' | '60d_not'
+  const [sortBy, setSortBy]               = useState('name')        // 'name' | 'updated'
   const [showCount, setShowCount]         = useState(PAGE)
   const [showAddModal, setShowAddModal]   = useState(false)
   const [copyMsg, setCopyMsg]             = useState('')
@@ -228,7 +271,7 @@ export default function People() {
     const [peopleRes, progRes, waMembRes, formsRes, waGroupsRes] = await Promise.all([
       pageAll(from => supabase
         .from('people')
-        .select('id, full_name, phone, phone_normalized, email, location, profile_id, person_type, needs_review, country, register_no, community_status')
+        .select('id, full_name, phone, phone_normalized, email, location, profile_id, person_type, needs_review, country, register_no, community_status, updated_at')
         .order('full_name').order('id')
         .range(from, from + CHUNK - 1)),
       pageAll(from => supabase
@@ -283,14 +326,14 @@ export default function People() {
 
   useEffect(() => { fetchPeople() }, [fetchPeople])
 
-  // Reset paging, clear selection, and cancel bulk when any filter changes
+  // Reset paging, clear selection, and cancel bulk when any filter or sort changes
   useEffect(() => {
     setShowCount(PAGE)
     setSelectedIds(new Set())
     setBulkAction(null)
     setIncludeDeclined(false)
     setBulkError('')
-  }, [search, typeFilter, needsReview, filter, progFilter, waFilter, communityFilter, countryFilter])
+  }, [search, typeFilter, needsReview, filter, progFilter, waFilter, communityFilter, countryFilter, updatedFilter, sortBy])
 
   // ── Filtering ──────────────────────────────────────────────────────────────
   const base = people.filter(p => {
@@ -337,6 +380,15 @@ export default function People() {
       if (p.country !== countryFilter) return false
     }
 
+    // Updated filter — raw ms comparison is sufficient for day-granularity ranges
+    if (updatedFilter) {
+      if (!p.updated_at) return updatedFilter === '60d_not' ? false : false
+      const ageDays = (Date.now() - new Date(p.updated_at).getTime()) / 86400000
+      if (updatedFilter === '7d'      && ageDays > 7)  return false
+      if (updatedFilter === '30d'     && ageDays > 30) return false
+      if (updatedFilter === '60d_not' && ageDays <= 60) return false
+    }
+
     return true
   })
 
@@ -349,7 +401,17 @@ export default function People() {
     : typeFilter === 'contacts' ? base.filter(p => p.person_type === 'contact')
     : base
 
-  const displayed = filtered.slice(0, showCount)
+  // Sort — name order comes from DB; recently-updated is a client-side sort
+  const sortedFiltered = sortBy === 'updated'
+    ? [...filtered].sort((a, b) => {
+        if (!a.updated_at && !b.updated_at) return 0
+        if (!a.updated_at) return 1
+        if (!b.updated_at) return -1
+        return new Date(b.updated_at) - new Date(a.updated_at)
+      })
+    : filtered
+
+  const displayed = sortedFiltered.slice(0, showCount)
 
   // ── Selection helpers ──────────────────────────────────────────────────────
   const allOnPage  = displayed.length > 0 && displayed.every(p => selectedIds.has(p.id))
@@ -439,8 +501,11 @@ export default function People() {
       }
     }
 
-    // Optimistic in-memory update
-    setPeople(prev => prev.map(p => updatedSet.has(p.id) ? { ...p, ...updateData } : p))
+    // Optimistic in-memory update (also stamp updated_at so relative label refreshes)
+    const nowISO = new Date().toISOString()
+    setPeople(prev => prev.map(p =>
+      updatedSet.has(p.id) ? { ...p, ...updateData, updated_at: nowISO } : p
+    ))
 
     setSelectedIds(new Set())
     setBulkAction(null)
@@ -474,6 +539,10 @@ export default function People() {
     const lbl = countryFilter === '__none__' ? 'None' : countryFilter
     activeChips.push({ label: `Country: ${lbl}`, onRemove: () => setCountryFilter('') })
   }
+  if (updatedFilter) {
+    const UPD_CHIP = { '7d': 'Last 7 days', '30d': 'Last 30 days', '60d_not': 'Not updated in 60 days' }
+    activeChips.push({ label: `Updated: ${UPD_CHIP[updatedFilter]}`, onRemove: () => setUpdatedFilter('') })
+  }
   const hasFilters = activeChips.length > 0
 
   function clearFilters() {
@@ -481,6 +550,7 @@ export default function People() {
     setWaFilter('')
     setCommunityFilter('')
     setCountryFilter('')
+    setUpdatedFilter('')
   }
 
   // ── Title ──────────────────────────────────────────────────────────────────
@@ -491,7 +561,7 @@ export default function People() {
 
   // ── Copy phones ────────────────────────────────────────────────────────────
   async function handleCopyPhones() {
-    const phones = filtered
+    const phones = sortedFiltered
       .filter(p => p.phone)
       .map(p => p.phone_normalized ? '+' + p.phone_normalized : p.phone)
     try {
@@ -515,7 +585,7 @@ export default function People() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900">
-          {titleLabel} ({filtered.length})
+          {titleLabel} ({sortedFiltered.length})
         </h1>
         <button
           onClick={() => setShowAddModal(true)}
@@ -610,7 +680,7 @@ export default function People() {
         )}
       </div>
 
-      {/* Row 3: Invite filters + copy button */}
+      {/* Row 3: Invite filters + updated filter + sort + copy button */}
       {!loading && !loadError && (
         <div className="mb-4">
           <div className="flex items-center gap-2 flex-wrap">
@@ -638,6 +708,18 @@ export default function People() {
               <option value="">Any country</option>
               {countryList.map(c => <option key={c} value={c}>{c}</option>)}
               <option value="__none__">No country</option>
+            </select>
+
+            <select value={updatedFilter} onChange={e => setUpdatedFilter(e.target.value)} className={selCls(!!updatedFilter)}>
+              <option value="">Updated: Any</option>
+              <option value="7d">Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+              <option value="60d_not">Not updated in 60 days</option>
+            </select>
+
+            <select value={sortBy} onChange={e => setSortBy(e.target.value)} className={selCls(sortBy !== 'name')}>
+              <option value="name">Sort: Name A–Z</option>
+              <option value="updated">Recently updated first</option>
             </select>
 
             <div className="ml-auto">
@@ -714,81 +796,92 @@ export default function People() {
                   </tr>
                 </thead>
                 <tbody>
-                  {displayed.map(p => (
-                    <tr
-                      key={p.id}
-                      onClick={() => navigate(`/people/${p.id}`)}
-                      className={`border-b border-gray-50 last:border-0 hover:bg-gray-50 cursor-pointer transition-colors ${
-                        selectedIds.has(p.id) ? 'bg-blue-50/50' : ''
-                      }`}
-                    >
-                      <td className="px-3 py-4" onClick={e => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={selectedIds.has(p.id)}
-                          onChange={e => toggleRow(e, p.id)}
-                          onClick={e => e.stopPropagation()}
-                          className="w-4 h-4 rounded border-gray-300 text-[#1742b5] cursor-pointer accent-[#1742b5]"
-                        />
-                      </td>
-                      <td className="px-4 py-4">
-                        <span className="text-sm font-medium text-gray-900">{p.full_name}</span>
-                      </td>
-                      <td className="px-4 py-4">
-                        <span className="text-sm text-gray-600">{p.phone || '—'}</span>
-                      </td>
-                      <td className="px-4 py-4">
-                        <span className="text-sm text-gray-600">{p.email || '—'}</span>
-                      </td>
-                      <td className="px-4 py-4">
-                        <span className="text-sm text-gray-500">{p.location || '—'}</span>
-                      </td>
-                      <td className="px-4 py-4">
-                        <div className="flex gap-1.5 flex-wrap">
-                          {p.needs_review && (
-                            <span className="text-xs font-medium bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">Needs review</span>
+                  {displayed.map(p => {
+                    const upd = relativeUpdated(p.updated_at)
+                    return (
+                      <tr
+                        key={p.id}
+                        onClick={() => navigate(`/people/${p.id}`)}
+                        className={`border-b border-gray-50 last:border-0 hover:bg-gray-50 cursor-pointer transition-colors ${
+                          selectedIds.has(p.id) ? 'bg-blue-50/50' : ''
+                        }`}
+                      >
+                        <td className="px-3 py-4" onClick={e => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.has(p.id)}
+                            onChange={e => toggleRow(e, p.id)}
+                            onClick={e => e.stopPropagation()}
+                            className="w-4 h-4 rounded border-gray-300 text-[#1742b5] cursor-pointer accent-[#1742b5]"
+                          />
+                        </td>
+                        <td className="px-4 py-4">
+                          <span className="text-sm font-medium text-gray-900">{p.full_name}</span>
+                          {upd && (
+                            <p
+                              className="text-xs text-gray-400 mt-0.5 leading-tight"
+                              title={upd.title}
+                            >
+                              {upd.label}
+                            </p>
                           )}
-                          {p.person_type === 'contact' && (
-                            <span className="text-xs font-medium bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">Contact</span>
-                          )}
-                          {p.profile_id && (
-                            <span className="text-xs font-medium bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">Connect</span>
-                          )}
-                          {formIds.has(p.id) && (
-                            <span className="text-xs font-medium bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Form</span>
-                          )}
-                          {p.community_status && p.community_status !== 'not_invited' && (
-                            <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                              p.community_status === 'invited' ? 'bg-blue-100 text-blue-700'
-                              : p.community_status === 'joined' ? 'bg-green-100 text-green-700'
-                              : 'bg-gray-100 text-gray-500'
-                            }`}>
-                              Community: {COMMUNITY_LABELS[p.community_status]}
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td className="px-4 py-4">
+                          <span className="text-sm text-gray-600">{p.phone || '—'}</span>
+                        </td>
+                        <td className="px-4 py-4">
+                          <span className="text-sm text-gray-600">{p.email || '—'}</span>
+                        </td>
+                        <td className="px-4 py-4">
+                          <span className="text-sm text-gray-500">{p.location || '—'}</span>
+                        </td>
+                        <td className="px-4 py-4">
+                          <div className="flex gap-1.5 flex-wrap">
+                            {p.needs_review && (
+                              <span className="text-xs font-medium bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">Needs review</span>
+                            )}
+                            {p.person_type === 'contact' && (
+                              <span className="text-xs font-medium bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">Contact</span>
+                            )}
+                            {p.profile_id && (
+                              <span className="text-xs font-medium bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">Connect</span>
+                            )}
+                            {formIds.has(p.id) && (
+                              <span className="text-xs font-medium bg-green-100 text-green-700 px-2 py-0.5 rounded-full">Form</span>
+                            )}
+                            {p.community_status && p.community_status !== 'not_invited' && (
+                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${
+                                p.community_status === 'invited' ? 'bg-blue-100 text-blue-700'
+                                : p.community_status === 'joined' ? 'bg-green-100 text-green-700'
+                                : 'bg-gray-100 text-gray-500'
+                              }`}>
+                                Community: {COMMUNITY_LABELS[p.community_status]}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             )}
           </div>
 
-          {filtered.length > showCount && (
+          {sortedFiltered.length > showCount && (
             <div className="mt-4 text-center">
               <button
                 onClick={() => setShowCount(c => c + PAGE)}
                 className="px-6 py-2 text-sm font-medium text-[#1742b5] border border-[#1742b5]/30 rounded-lg hover:bg-[#1742b5]/5 transition-colors"
               >
-                Show more ({filtered.length - showCount} remaining)
+                Show more ({sortedFiltered.length - showCount} remaining)
               </button>
             </div>
           )}
 
-          {filtered.length > 0 && (
+          {sortedFiltered.length > 0 && (
             <p className="mt-3 text-center text-xs text-gray-400">
-              Showing {Math.min(showCount, filtered.length)} of {filtered.length}
+              Showing {Math.min(showCount, sortedFiltered.length)} of {sortedFiltered.length}
             </p>
           )}
         </>
