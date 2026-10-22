@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { Search, Plus, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 const CHUNK = 1000
 const PAGE  = 100
+const BATCH = 100   // IDs per Supabase .in() call
 
 // Must mirror normalize_phone() in supabase/add_people_table.sql exactly.
 function normalizePhone(raw) {
@@ -24,6 +25,17 @@ const COMMUNITY_LABELS = {
   joined:      'Joined',
   declined:    'Declined',
   cant_reach:  "Can't reach",
+}
+
+function localToday() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function chunks(arr, size) {
+  const result = []
+  for (let i = 0; i < arr.length; i += size) result.push(arr.slice(i, i + size))
+  return result
 }
 
 function AddPersonModal({ onClose, onSaved, existingPeople }) {
@@ -180,17 +192,26 @@ export default function People() {
   const [needsReview, setNeedsReview]     = useState(false)
   const [progFilter, setProgFilter]       = useState('')            // '' | '__none__' | programme name
   const [waFilter, setWaFilter]           = useState('')            // '' | '__none__' | group_id
-  const [communityFilter, setCommunityFilter] = useState('')        // '' | '__null__' | status value
+  // community filter: '' | '__not_invited__' | 'invited' | 'joined' | 'declined'
+  const [communityFilter, setCommunityFilter] = useState('')
   const [countryFilter, setCountryFilter] = useState('')            // '' | '__none__' | country name
   const [showCount, setShowCount]         = useState(PAGE)
   const [showAddModal, setShowAddModal]   = useState(false)
   const [copyMsg, setCopyMsg]             = useState('')
 
+  // Selection + bulk state
+  const [selectedIds, setSelectedIds]       = useState(new Set())
+  const [bulkAction, setBulkAction]         = useState(null)   // null | 'invited' | 'joined'
+  const [includeDeclined, setIncludeDeclined] = useState(false)
+  const [bulkSaving, setBulkSaving]         = useState(false)
+  const [bulkError, setBulkError]           = useState('')
+  const [bulkResult, setBulkResult]         = useState(null)   // { updated, skipped } | null
+  const headerCheckRef = useRef(null)
+
   const fetchPeople = useCallback(async () => {
     setLoading(true)
     setLoadError('')
 
-    // Helper: page through any query returning {data, error}
     async function pageAll(queryFn) {
       const all = []
       let from = 0
@@ -204,7 +225,6 @@ export default function People() {
       return { data: all, error: null }
     }
 
-    // Run all fetches in parallel
     const [peopleRes, progRes, waMembRes, formsRes, waGroupsRes] = await Promise.all([
       pageAll(from => supabase
         .from('people')
@@ -228,26 +248,22 @@ export default function People() {
     const firstError = peopleRes.error || progRes.error || waMembRes.error || formsRes.error
     if (firstError) { setLoadError(firstError.message); setLoading(false); return }
 
-    // Build programme membership map
     const progMap = new Map()
     for (const r of progRes.data) {
       if (!progMap.has(r.person_id)) progMap.set(r.person_id, new Set())
       progMap.get(r.person_id).add(r.programme)
     }
 
-    // Build WhatsApp group membership map
     const waMemMap = new Map()
     for (const r of waMembRes.data) {
       if (!waMemMap.has(r.person_id)) waMemMap.set(r.person_id, new Set())
       waMemMap.get(r.person_id).add(r.group_id)
     }
 
-    // Distinct programmes — locale-aware sort (handles Malayalam script)
     const allProgs = [...new Set(progRes.data.map(r => r.programme))].sort((a, b) =>
       a.localeCompare(b, ['ml', 'en'])
     )
 
-    // Distinct countries — India first, then alphabetical
     const countriesRaw = new Set(peopleRes.data.map(p => p.country).filter(Boolean))
     const countries = [...countriesRaw].sort((a, b) => {
       if (a === 'India') return -1
@@ -267,19 +283,21 @@ export default function People() {
 
   useEffect(() => { fetchPeople() }, [fetchPeople])
 
-  // Reset visible row count whenever any filter changes
+  // Reset paging, clear selection, and cancel bulk when any filter changes
   useEffect(() => {
     setShowCount(PAGE)
+    setSelectedIds(new Set())
+    setBulkAction(null)
+    setIncludeDeclined(false)
+    setBulkError('')
   }, [search, typeFilter, needsReview, filter, progFilter, waFilter, communityFilter, countryFilter])
 
   // ── Filtering ──────────────────────────────────────────────────────────────
-  // base = all filters applied EXCEPT the type-tab filter (so tab counts stay accurate)
   const base = people.filter(p => {
     if (needsReview && !p.needs_review) return false
     if (filter === 'connect' && !p.profile_id) return false
     if (filter === 'no-app'  &&  p.profile_id) return false
 
-    // Search (name, email, phone digits)
     const q = search.trim().toLowerCase()
     if (q) {
       const matchName  = p.full_name?.toLowerCase().includes(q)
@@ -292,28 +310,27 @@ export default function People() {
       if (!matchName && !matchEmail && !matchPhone) return false
     }
 
-    // Programme filter
     if (progFilter === '__none__') {
       if (programmeMap.has(p.id)) return false
     } else if (progFilter) {
       if (!programmeMap.get(p.id)?.has(progFilter)) return false
     }
 
-    // WhatsApp group filter
     if (waFilter === '__none__') {
       if (waMap.has(p.id)) return false
     } else if (waFilter) {
       if (!waMap.get(p.id)?.has(waFilter)) return false
     }
 
-    // Community status filter
-    if (communityFilter === '__null__') {
-      if (p.community_status != null) return false
+    // Community filter: '__not_invited__' matches NULL + not_invited + cant_reach
+    if (communityFilter === '__not_invited__') {
+      if (p.community_status != null &&
+          p.community_status !== 'not_invited' &&
+          p.community_status !== 'cant_reach') return false
     } else if (communityFilter) {
       if (p.community_status !== communityFilter) return false
     }
 
-    // Country filter
     if (countryFilter === '__none__') {
       if (p.country) return false
     } else if (countryFilter) {
@@ -323,17 +340,115 @@ export default function People() {
     return true
   })
 
-  // Tab counts — derived from base (so they respond to invite/search/account filters)
+  // Tab counts — derived from base
   const studentsCount = base.filter(p => p.person_type !== 'contact').length
   const contactsCount = base.filter(p => p.person_type === 'contact').length
   const reviewCount   = base.filter(p => p.needs_review).length
 
-  // Apply type-tab filter on top of base
   const filtered = typeFilter === 'students' ? base.filter(p => p.person_type !== 'contact')
     : typeFilter === 'contacts' ? base.filter(p => p.person_type === 'contact')
     : base
 
   const displayed = filtered.slice(0, showCount)
+
+  // ── Selection helpers ──────────────────────────────────────────────────────
+  const allOnPage  = displayed.length > 0 && displayed.every(p => selectedIds.has(p.id))
+  const someOnPage = !allOnPage && displayed.some(p => selectedIds.has(p.id))
+
+  useEffect(() => {
+    if (headerCheckRef.current) {
+      headerCheckRef.current.indeterminate = someOnPage
+    }
+  }, [someOnPage, allOnPage])
+
+  function toggleSelectAll(e) {
+    e.stopPropagation()
+    if (allOnPage) {
+      setSelectedIds(ids => { const n = new Set(ids); displayed.forEach(p => n.delete(p.id)); return n })
+    } else {
+      setSelectedIds(ids => { const n = new Set(ids); displayed.forEach(p => n.add(p.id)); return n })
+    }
+  }
+
+  function toggleRow(e, id) {
+    e.stopPropagation()
+    setSelectedIds(ids => {
+      const n = new Set(ids)
+      n.has(id) ? n.delete(id) : n.add(id)
+      return n
+    })
+  }
+
+  // ── Bulk computed values (used in confirm UI) ─────────────────────────────
+  const selPeopleSnap  = bulkAction ? people.filter(p => selectedIds.has(p.id)) : []
+
+  const inviteToUpdate = bulkAction === 'invited'
+    ? selPeopleSnap.filter(p =>
+        p.community_status == null ||
+        p.community_status === 'not_invited' ||
+        p.community_status === 'cant_reach'
+      )
+    : []
+
+  const joinDeclinedCount = bulkAction === 'joined'
+    ? selPeopleSnap.filter(p => p.community_status === 'declined').length
+    : 0
+
+  const joinToUpdate = bulkAction === 'joined'
+    ? selPeopleSnap.filter(p => {
+        if (p.community_status === 'joined') return false
+        if (p.community_status === 'declined' && !includeDeclined) return false
+        return true
+      })
+    : []
+
+  // ── Bulk save ──────────────────────────────────────────────────────────────
+  async function runBulkSave() {
+    setBulkSaving(true)
+    setBulkError('')
+
+    const selectedPeople = people.filter(p => selectedIds.has(p.id))
+    let toUpdate, updateData
+
+    if (bulkAction === 'invited') {
+      toUpdate = selectedPeople.filter(p =>
+        p.community_status == null ||
+        p.community_status === 'not_invited' ||
+        p.community_status === 'cant_reach'
+      )
+      updateData = { community_status: 'invited', community_invited_on: localToday() }
+    } else {
+      toUpdate = selectedPeople.filter(p => {
+        if (p.community_status === 'joined') return false
+        if (p.community_status === 'declined' && !includeDeclined) return false
+        return true
+      })
+      updateData = { community_status: 'joined' }
+    }
+
+    const ids    = toUpdate.map(p => p.id)
+    const skipped = selectedPeople.length - ids.length
+    const updatedSet = new Set(ids)
+
+    for (const batch of chunks(ids, BATCH)) {
+      const { error: err } = await supabase.from('people').update(updateData).in('id', batch)
+      if (err) {
+        setBulkError(err.message)
+        setBulkSaving(false)
+        return
+      }
+    }
+
+    // Optimistic in-memory update
+    setPeople(prev => prev.map(p => updatedSet.has(p.id) ? { ...p, ...updateData } : p))
+
+    setSelectedIds(new Set())
+    setBulkAction(null)
+    setIncludeDeclined(false)
+    setBulkSaving(false)
+    setBulkResult({ updated: ids.length, skipped })
+    setTimeout(() => setBulkResult(null), 6000)
+  }
 
   // ── Active filter chips ────────────────────────────────────────────────────
   const activeChips = []
@@ -347,11 +462,13 @@ export default function People() {
     activeChips.push({ label: `Group: ${grpName}`, onRemove: () => setWaFilter('') })
   }
   if (communityFilter) {
-    const COMM = {
-      '__null__': 'Not set', not_invited: 'Not invited', invited: 'Invited',
-      joined: 'Joined', declined: 'Declined', cant_reach: "Can't reach",
+    const COMM_CHIP = {
+      '__not_invited__': 'Not invited',
+      invited:  'Invited, not joined',
+      joined:   'Joined',
+      declined: 'Declined',
     }
-    activeChips.push({ label: `Community: ${COMM[communityFilter] ?? communityFilter}`, onRemove: () => setCommunityFilter('') })
+    activeChips.push({ label: `Community: ${COMM_CHIP[communityFilter] ?? communityFilter}`, onRemove: () => setCommunityFilter('') })
   }
   if (countryFilter) {
     const lbl = countryFilter === '__none__' ? 'None' : countryFilter
@@ -386,7 +503,6 @@ export default function People() {
     setTimeout(() => setCopyMsg(''), 3000)
   }
 
-  // Dropdown class helper
   const selCls = active =>
     `px-3 py-1.5 text-xs rounded-lg border cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#1742b5]/20 transition-colors ${
       active
@@ -395,7 +511,7 @@ export default function People() {
     }`
 
   return (
-    <div className="p-6">
+    <div className="p-6 pb-20">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900">
@@ -409,6 +525,19 @@ export default function People() {
           Add Student
         </button>
       </div>
+
+      {/* Bulk result notice */}
+      {bulkResult && (
+        <div className="mb-4 bg-green-50 border border-green-200 text-green-800 text-sm px-4 py-3 rounded-lg flex items-center justify-between">
+          <span>
+            Updated {bulkResult.updated}
+            {bulkResult.skipped > 0 && `, skipped ${bulkResult.skipped} (already invited / joined / declined)`}
+          </span>
+          <button onClick={() => setBulkResult(null)} className="text-green-600 hover:text-green-800 ml-4">
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       {/* Row 1: search + account pills */}
       <div className="flex items-center gap-3 mb-3">
@@ -498,13 +627,11 @@ export default function People() {
             </select>
 
             <select value={communityFilter} onChange={e => setCommunityFilter(e.target.value)} className={selCls(!!communityFilter)}>
-              <option value="">Any status</option>
-              <option value="__null__">Not set</option>
-              <option value="not_invited">Not invited</option>
-              <option value="invited">Invited</option>
+              <option value="">Thapovanam: Any</option>
+              <option value="__not_invited__">Not invited</option>
+              <option value="invited">Invited, not joined</option>
               <option value="joined">Joined</option>
               <option value="declined">Declined</option>
-              <option value="cant_reach">Can't reach</option>
             </select>
 
             <select value={countryFilter} onChange={e => setCountryFilter(e.target.value)} className={selCls(!!countryFilter)}>
@@ -568,7 +695,18 @@ export default function People() {
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-gray-100">
-                    <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-6 py-3">Name</th>
+                    <th className="px-3 py-3 w-10">
+                      <input
+                        ref={headerCheckRef}
+                        type="checkbox"
+                        checked={allOnPage}
+                        onChange={toggleSelectAll}
+                        onClick={e => e.stopPropagation()}
+                        className="w-4 h-4 rounded border-gray-300 text-[#1742b5] cursor-pointer accent-[#1742b5]"
+                        title="Select all on this page"
+                      />
+                    </th>
+                    <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-4 py-3">Name</th>
                     <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-4 py-3">Phone</th>
                     <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-4 py-3">Email</th>
                     <th className="text-left text-xs font-semibold text-gray-400 uppercase tracking-wide px-4 py-3">Location</th>
@@ -580,9 +718,20 @@ export default function People() {
                     <tr
                       key={p.id}
                       onClick={() => navigate(`/people/${p.id}`)}
-                      className="border-b border-gray-50 last:border-0 hover:bg-gray-50 cursor-pointer transition-colors"
+                      className={`border-b border-gray-50 last:border-0 hover:bg-gray-50 cursor-pointer transition-colors ${
+                        selectedIds.has(p.id) ? 'bg-blue-50/50' : ''
+                      }`}
                     >
-                      <td className="px-6 py-4">
+                      <td className="px-3 py-4" onClick={e => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.has(p.id)}
+                          onChange={e => toggleRow(e, p.id)}
+                          onClick={e => e.stopPropagation()}
+                          className="w-4 h-4 rounded border-gray-300 text-[#1742b5] cursor-pointer accent-[#1742b5]"
+                        />
+                      </td>
+                      <td className="px-4 py-4">
                         <span className="text-sm font-medium text-gray-900">{p.full_name}</span>
                       </td>
                       <td className="px-4 py-4">
@@ -614,7 +763,7 @@ export default function People() {
                               : p.community_status === 'joined' ? 'bg-green-100 text-green-700'
                               : 'bg-gray-100 text-gray-500'
                             }`}>
-                              {COMMUNITY_LABELS[p.community_status]}
+                              Community: {COMMUNITY_LABELS[p.community_status]}
                             </span>
                           )}
                         </div>
@@ -651,6 +800,95 @@ export default function People() {
           onSaved={() => { setShowAddModal(false); fetchPeople() }}
           existingPeople={people}
         />
+      )}
+
+      {/* ── Fixed bulk action bar ─────────────────────────────────────────── */}
+      {selectedIds.size > 0 && (
+        <div className="fixed bottom-0 left-60 right-0 z-40 bg-white border-t border-gray-200 shadow-lg">
+          <div className="px-6 py-3">
+            {bulkAction === null ? (
+              /* Action selection */
+              <div className="flex items-center gap-4">
+                <span className="text-sm font-medium text-gray-700">
+                  {selectedIds.size} {selectedIds.size === 1 ? 'person' : 'people'} selected
+                </span>
+                <div className="flex gap-2 ml-2">
+                  <button
+                    onClick={() => { setBulkAction('invited'); setBulkError('') }}
+                    className="px-4 py-1.5 text-sm font-medium bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                  >
+                    Mark invited
+                  </button>
+                  <button
+                    onClick={() => { setBulkAction('joined'); setBulkError('') }}
+                    className="px-4 py-1.5 text-sm font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                  >
+                    Mark joined
+                  </button>
+                </div>
+                <button
+                  onClick={() => { setSelectedIds(new Set()); setBulkError('') }}
+                  className="ml-auto text-xs text-gray-400 hover:text-gray-600 underline underline-offset-2"
+                >
+                  Clear selection
+                </button>
+              </div>
+            ) : (
+              /* Confirm */
+              <div className="flex items-start gap-4 flex-wrap">
+                <div className="flex-1 min-w-0">
+                  {bulkAction === 'invited' ? (
+                    <p className="text-sm text-gray-800">
+                      Mark <span className="font-semibold">{inviteToUpdate.length}</span> {inviteToUpdate.length === 1 ? 'person' : 'people'} as <span className="font-semibold">Invited</span> in the Thapovanam Siddhashram community
+                      {selectedIds.size - inviteToUpdate.length > 0 && (
+                        <span className="text-gray-500">
+                          {' '}({selectedIds.size - inviteToUpdate.length} already invited / joined / declined — will be skipped)
+                        </span>
+                      )}
+                    </p>
+                  ) : (
+                    <div>
+                      <p className="text-sm text-gray-800">
+                        Mark <span className="font-semibold">{joinToUpdate.length}</span> {joinToUpdate.length === 1 ? 'person' : 'people'} as <span className="font-semibold">Joined</span> in the Thapovanam Siddhashram community
+                        {!includeDeclined && joinDeclinedCount > 0 && (
+                          <span className="text-gray-500"> ({joinDeclinedCount} declined will be skipped)</span>
+                        )}
+                      </p>
+                      {joinDeclinedCount > 0 && (
+                        <label className="inline-flex items-center gap-2 mt-1.5 text-xs text-gray-600 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={includeDeclined}
+                            onChange={e => setIncludeDeclined(e.target.checked)}
+                            className="w-3.5 h-3.5 rounded border-gray-300 accent-[#1742b5]"
+                          />
+                          Include declined (+{joinDeclinedCount})
+                        </label>
+                      )}
+                    </div>
+                  )}
+                  {bulkError && <p className="text-xs text-red-600 mt-1">{bulkError}</p>}
+                </div>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    onClick={runBulkSave}
+                    disabled={bulkSaving || (bulkAction === 'invited' ? inviteToUpdate.length === 0 : joinToUpdate.length === 0)}
+                    className="px-4 py-1.5 text-sm font-medium bg-[#1742b5] text-white rounded-lg hover:bg-[#1330a0] disabled:opacity-50 transition-colors"
+                  >
+                    {bulkSaving ? 'Saving…' : 'Confirm'}
+                  </button>
+                  <button
+                    onClick={() => { setBulkAction(null); setIncludeDeclined(false); setBulkError('') }}
+                    disabled={bulkSaving}
+                    className="px-4 py-1.5 text-sm font-medium text-gray-600 border border-gray-200 rounded-lg hover:border-gray-300 disabled:opacity-50 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </div>
   )
