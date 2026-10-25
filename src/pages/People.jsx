@@ -79,6 +79,50 @@ function relativeUpdated(ts) {
   return { label, title: longFmt.format(tsDate) }
 }
 
+// Inline copy icon button — manages its own copied/failed flash state.
+function CopyButton({ value, label }) {
+  const [state, setState] = useState('idle') // 'idle' | 'copied' | 'failed'
+  const timerRef = useRef(null)
+
+  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current) }, [])
+
+  async function handleClick(e) {
+    e.stopPropagation()
+    if (timerRef.current) clearTimeout(timerRef.current)
+    try {
+      await navigator.clipboard.writeText(value)
+      setState('copied')
+    } catch {
+      setState('failed')
+    }
+    timerRef.current = setTimeout(() => setState('idle'), 1500)
+  }
+
+  return (
+    <button
+      onClick={handleClick}
+      aria-label={label}
+      title={state === 'failed' ? 'Copy failed' : label}
+      className={`inline-flex items-center flex-shrink-0 transition-colors ${
+        state === 'copied' ? 'text-green-500'
+        : state === 'failed' ? 'text-red-400'
+        : 'text-gray-300 hover:text-gray-500'
+      }`}
+    >
+      {state === 'copied' ? (
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="20 6 9 17 4 12" />
+        </svg>
+      ) : (
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="9" y="2" width="13" height="13" rx="2" ry="2" />
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+        </svg>
+      )}
+    </button>
+  )
+}
+
 function AddPersonModal({ onClose, onSaved, existingPeople }) {
   const [form, setForm] = useState({ full_name: '', phone: '', email: '', location: '', notes: '' })
   const [saving, setSaving] = useState(false)
@@ -827,10 +871,27 @@ export default function People() {
                           )}
                         </td>
                         <td className="px-4 py-4">
-                          <span className="text-sm text-gray-600">{p.phone || '—'}</span>
+                          {p.phone ? (
+                            <div className="flex items-center gap-1.5 whitespace-nowrap">
+                              <span className="text-sm text-gray-600">{p.phone}</span>
+                              <CopyButton
+                                value={p.phone_normalized ? '+' + p.phone_normalized : p.phone}
+                                label="Copy phone"
+                              />
+                            </div>
+                          ) : (
+                            <span className="text-sm text-gray-600">—</span>
+                          )}
                         </td>
                         <td className="px-4 py-4">
-                          <span className="text-sm text-gray-600">{p.email || '—'}</span>
+                          {p.email ? (
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-sm text-gray-600">{p.email}</span>
+                              <CopyButton value={p.email} label="Copy email" />
+                            </div>
+                          ) : (
+                            <span className="text-sm text-gray-600">—</span>
+                          )}
                         </td>
                         <td className="px-4 py-4">
                           <span className="text-sm text-gray-500">{p.location || '—'}</span>
