@@ -326,13 +326,9 @@ export default function People() {
 
   useEffect(() => { fetchPeople() }, [fetchPeople])
 
-  // Reset paging, clear selection, and cancel bulk when any filter or sort changes
+  // Reset paging when any filter or sort changes — selection intentionally survives
   useEffect(() => {
     setShowCount(PAGE)
-    setSelectedIds(new Set())
-    setBulkAction(null)
-    setIncludeDeclined(false)
-    setBulkError('')
   }, [search, typeFilter, needsReview, filter, progFilter, waFilter, communityFilter, countryFilter, updatedFilter, sortBy])
 
   // ── Filtering ──────────────────────────────────────────────────────────────
@@ -412,6 +408,10 @@ export default function People() {
     : filtered
 
   const displayed = sortedFiltered.slice(0, showCount)
+
+  // Selected people that are not visible in the current page
+  const selectedInView    = displayed.filter(p => selectedIds.has(p.id)).length
+  const selectedNotInView = selectedIds.size - selectedInView
 
   // ── Selection helpers ──────────────────────────────────────────────────────
   const allOnPage  = displayed.length > 0 && displayed.every(p => selectedIds.has(p.id))
@@ -904,6 +904,9 @@ export default function People() {
               <div className="flex items-center gap-4">
                 <span className="text-sm font-medium text-gray-700">
                   {selectedIds.size} {selectedIds.size === 1 ? 'person' : 'people'} selected
+                  {selectedNotInView > 0 && (
+                    <span className="font-normal text-gray-400"> ({selectedNotInView} not in current view)</span>
+                  )}
                 </span>
                 <div className="flex gap-2 ml-2">
                   <button
@@ -920,10 +923,10 @@ export default function People() {
                   </button>
                 </div>
                 <button
-                  onClick={() => { setSelectedIds(new Set()); setBulkError('') }}
+                  onClick={() => { setSelectedIds(new Set()); setBulkAction(null); setIncludeDeclined(false); setBulkError('') }}
                   className="ml-auto text-xs text-gray-400 hover:text-gray-600 underline underline-offset-2"
                 >
-                  Clear selection
+                  Clear
                 </button>
               </div>
             ) : (
