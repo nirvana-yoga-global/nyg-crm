@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { Search, Plus, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import ContactsExport from '../components/ContactsExport'
+import TagMangoExport from '../components/TagMangoExport'
 
 const CHUNK = 1000
 const PAGE  = 100
@@ -294,6 +296,7 @@ export default function People() {
   const [bulkError, setBulkError]           = useState('')
   const [bulkResult, setBulkResult]         = useState(null)   // { updated, skipped } | null
   const headerCheckRef = useRef(null)
+  const tagMangoRef    = useRef(null)
 
   const fetchPeople = useCallback(async () => {
     setLoading(true)
@@ -766,7 +769,14 @@ export default function People() {
               <option value="updated">Recently updated first</option>
             </select>
 
-            <div className="ml-auto">
+            <div className="ml-auto flex items-center gap-2">
+              <ContactsExport people={sortedFiltered} />
+              <TagMangoExport
+                ref={tagMangoRef}
+                people={people}
+                sortedFiltered={sortedFiltered}
+                selectedIds={selectedIds}
+              />
               <button
                 onClick={handleCopyPhones}
                 className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap ${
@@ -982,13 +992,31 @@ export default function People() {
                   >
                     Mark joined
                   </button>
+                  <button
+                    onClick={() => tagMangoRef.current?.open()}
+                    className="px-4 py-1.5 text-sm font-medium bg-white text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+                  >
+                    Download CSV for TagMango
+                  </button>
                 </div>
-                <button
-                  onClick={() => { setSelectedIds(new Set()); setBulkAction(null); setIncludeDeclined(false); setBulkError('') }}
-                  className="ml-auto text-xs text-gray-400 hover:text-gray-600 underline underline-offset-2"
-                >
-                  Clear
-                </button>
+                <div className="ml-auto flex items-center gap-3">
+                  <button
+                    onClick={() => setSelectedIds(ids => {
+                      const n = new Set(ids)
+                      sortedFiltered.forEach(p => n.add(p.id))
+                      return n
+                    })}
+                    className="text-xs text-[#1742b5] hover:underline"
+                  >
+                    Select all {sortedFiltered.length} in this list
+                  </button>
+                  <button
+                    onClick={() => { setSelectedIds(new Set()); setBulkAction(null); setIncludeDeclined(false); setBulkError('') }}
+                    className="text-xs text-gray-400 hover:text-gray-600 underline underline-offset-2"
+                  >
+                    Clear
+                  </button>
+                </div>
               </div>
             ) : (
               /* Confirm */
